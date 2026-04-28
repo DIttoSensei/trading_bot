@@ -7,6 +7,7 @@ ALPACA_PAPER = True
 
 # Core trading setup (aggressive but controlled, no leverage)
 SYMBOL = os.getenv("TRADE_SYMBOL", "BTC/USD")
+TRADE_SYMBOLS = [s.strip() for s in os.getenv("TRADE_SYMBOLS", SYMBOL).split(",") if s.strip()]
 POSITION_FRACTION = float(os.getenv("POSITION_FRACTION", "0.70"))
 MIN_EQUITY_FRACTION = float(os.getenv("MIN_EQUITY_FRACTION", "0.20"))
 MAX_EQUITY_FRACTION = float(os.getenv("MAX_EQUITY_FRACTION", "1.00"))  # no leverage, up to full equity

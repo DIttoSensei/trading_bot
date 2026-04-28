@@ -44,6 +44,9 @@ class GoogleSheetLogger:
                     "position_qty",
                     "equity",
                     "drawdown",
+                    "traded",
+                    "regime",
+                    "threshold",
                     "note",
                 ]
             )
