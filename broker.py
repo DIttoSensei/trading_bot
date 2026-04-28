@@ -13,17 +13,14 @@ class Broker:
     def submit_order(self, symbol, side, qty):
         qty = round(float(qty), 4)
 
-        # IMPORTANT FIX: Alpaca fractional rules
-        if qty < 1:
-            tif = TimeInForce.DAY
-        else:
-            tif = TimeInForce.GTC
-
+        # For Crypto, GTC is almost always required.
+        # If Alpaca specifically requires DAY for fractional on certain pairs, 
+        # check their latest docs, but for BTC/USD, GTC is the standard.
         order = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=OrderSide.BUY if side == "BUY" else OrderSide.SELL,
-            time_in_force=tif
+            time_in_force=TimeInForce.GTC 
         )
 
         return self.client.submit_order(order_data=order)

@@ -17,7 +17,7 @@ MIN_NOTIONAL_PER_TRADE = float(os.getenv("MIN_NOTIONAL_PER_TRADE", "50"))
 # Timing
 DATA_REFRESH_MINUTES = int(os.getenv("DATA_REFRESH_MINUTES", "15"))
 DECISION_INTERVAL_HOURS = int(os.getenv("DECISION_INTERVAL_HOURS", "1"))
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "600"))
+LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "1440"))
 MODEL_RETRAIN_HOURS = int(os.getenv("MODEL_RETRAIN_HOURS", "24"))
 BOT_RUN_ONCE = os.getenv("BOT_RUN_ONCE", "false").lower() == "true"
 
@@ -39,7 +39,7 @@ ATR_TP_MULTIPLIER = float(os.getenv("ATR_TP_MULTIPLIER", "4.8"))
 
 # Backtest gate
 ENABLE_BACKTEST_GATE = os.getenv("ENABLE_BACKTEST_GATE", "false").lower() == "true"
-ML_TRAIN_MIN_ROWS = int(os.getenv("ML_TRAIN_MIN_ROWS", "240"))
+ML_TRAIN_MIN_ROWS = int(os.getenv("ML_TRAIN_MIN_ROWS", "1300"))
 BACKTEST_TEST_WINDOW = int(os.getenv("BACKTEST_TEST_WINDOW", "96"))
 BACKTEST_MIN_SIGNALS = int(os.getenv("BACKTEST_MIN_SIGNALS", "6"))
 BACKTEST_MIN_WINRATE = float(os.getenv("BACKTEST_MIN_WINRATE", "0.45"))

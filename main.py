@@ -190,8 +190,10 @@ class TradingBot:
 
         feat = df.copy()
         feat["return"] = feat["close"].pct_change()
-        feat["momentum"] = feat["close"] - feat["close"].shift(3)
-        feat["volatility"] = feat["return"].rolling(5).std()
+        feat["momentum_3h"] = feat["close"] - feat["close"].shift(3)
+        feat["momentum_24h"] = feat["close"] - feat["close"].shift(24)
+        feat["volatility_24h"] = feat["return"].rolling(24).std()
+        feat["ma_50_dist"] = feat["close"] / feat["close"].rolling(50).mean()
         feat = feat.dropna()
         if feat.empty:
             print("Feature frame empty after engineering. HOLD.")
