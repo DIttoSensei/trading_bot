@@ -117,8 +117,17 @@ def technical_bot(df):
 
     # 6. Volume Profile (volume compared to 20-period average)
     data['volume_ma'] = data['volume'].rolling(20).mean()
+    
+    current_vol = data['volume'].iloc[-1]
+    avg_vol = data['volume_ma'].iloc[-1]
     price_change = data['close'].iloc[-1] - data['close'].iloc[-2]
-    vol_signal = np.tanh(vol_ratio - 1) * np.sign(price_change)
+
+    if pd.notna(avg_vol) and avg_vol > 0:
+        vol_ratio = current_vol / avg_vol
+        # If volume is high (ratio > 1) and price is rising, signal is positive
+        vol_signal = np.tanh(vol_ratio - 1) * np.sign(price_change)
+    else:
+        vol_signal = 0
 
     # Dynamic weights: more weight to RSI and MACD in trending markets
     trend_strength = abs(macd_signal)  # MACD magnitude indicates trend
