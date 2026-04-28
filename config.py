@@ -28,6 +28,7 @@ MIN_BUY_CONFIDENCE = float(os.getenv("MIN_BUY_CONFIDENCE", "0.56"))
 MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.04"))
 
 # Backtest gate
+ENABLE_BACKTEST_GATE = os.getenv("ENABLE_BACKTEST_GATE", "false").lower() == "true"
 ML_TRAIN_MIN_ROWS = int(os.getenv("ML_TRAIN_MIN_ROWS", "240"))
 BACKTEST_TEST_WINDOW = int(os.getenv("BACKTEST_TEST_WINDOW", "96"))
 BACKTEST_MIN_SIGNALS = int(os.getenv("BACKTEST_MIN_SIGNALS", "6"))

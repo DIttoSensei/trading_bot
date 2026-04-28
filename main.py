@@ -9,13 +9,14 @@ from alpaca.data.requests import CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 import config
-from backtester import walk_forward_gate
 from broker import Broker
 from layer1_technical import technical_bot
 from layer3_judge import LLMJudge
 from ml_layer import MLSpecialist
 from risk import RiskManager
 from sheet_logger import GoogleSheetLogger
+if config.ENABLE_BACKTEST_GATE:
+    from backtester import walk_forward_gate
 
 try:
     from dotenv import load_dotenv
@@ -90,27 +91,6 @@ class TradingBot:
             writer.writerow(row)
         self.sheet_logger.log_row(row)
 
-    def _log_hold_event(self, note: str, price: float = 0.0):
-        try:
-            equity, _, _ = self.get_account_state()
-            drawdown = self.risk.update(equity)
-            position_qty = self.get_position_qty()
-        except Exception:
-            equity = 0.0
-            drawdown = 0.0
-            position_qty = 0.0
-        self._log(
-            price=price,
-            action="HOLD",
-            confidence=0.0,
-            tech_signal=0.0,
-            ml_prob=0.0,
-            position_qty=position_qty,
-            equity=equity,
-            drawdown=drawdown,
-            note=note,
-        )
-
     def fetch_data(self) -> pd.DataFrame:
         end = datetime.now(UTC)
         start = end - timedelta(hours=config.LOOKBACK_HOURS)
@@ -167,31 +147,24 @@ class TradingBot:
         return round(max(qty, 0.0), 6)
 
     def evaluate_and_trade(self, df: pd.DataFrame):
+        if df is None or df.empty:
+            print("No market data fetched. HOLD.")
+            return
+
+        price = float(df.iloc[-1]["close"])
+        equity, buying_power, daily_loss = self.get_account_state()
+        drawdown = self.risk.update(equity)
+        position_qty = self.get_position_qty()
+
         if len(df) < config.ML_TRAIN_MIN_ROWS:
             print("Not enough data for safe decision. HOLD.")
-            last_price = float(df.iloc[-1]["close"]) if len(df) else 0.0
-            self._log_hold_event("not_enough_data", last_price)
+            self._log(price, "HOLD", 0.5, 0.0, 0.5, position_qty, equity, drawdown, "not_enough_data")
             return
 
         if self.should_retrain():
             print("Retraining ML model...")
             self.train_model(df)
 
-        gate = walk_forward_gate(
-            df,
-            min_rows=config.ML_TRAIN_MIN_ROWS,
-            test_window=config.BACKTEST_TEST_WINDOW,
-            min_signals=config.BACKTEST_MIN_SIGNALS,
-            min_winrate=config.BACKTEST_MIN_WINRATE,
-        )
-        if not gate["pass"]:
-            print(f"Backtest gate failed ({gate['reason']}). HOLD.")
-            gate_price = float(df.iloc[-1]["close"]) if len(df) else 0.0
-            self._log_hold_event(f"gate_{gate['reason']}", gate_price)
-            return
-
-        row = df.iloc[-1]
-        price = float(row["close"])
         tech_signal = float(technical_bot(df))
 
         feat = df.copy()
@@ -201,7 +174,7 @@ class TradingBot:
         feat = feat.dropna()
         if feat.empty:
             print("Feature frame empty after engineering. HOLD.")
-            self._log_hold_event("feature_frame_empty", price)
+            self._log(price, "HOLD", 0.5, tech_signal, 0.5, position_qty, equity, drawdown, "feature_frame_empty")
             return
 
         ml_prob = float(self.ml.predict(feat.iloc[-1]))
@@ -209,11 +182,31 @@ class TradingBot:
         action = decision["action"]
         confidence = float(decision["confidence"])
 
-        equity, buying_power, daily_loss = self.get_account_state()
-        drawdown = self.risk.update(equity)
+        if config.ENABLE_BACKTEST_GATE:
+            gate = walk_forward_gate(
+                df,
+                min_rows=config.ML_TRAIN_MIN_ROWS,
+                test_window=config.BACKTEST_TEST_WINDOW,
+                min_signals=config.BACKTEST_MIN_SIGNALS,
+                min_winrate=config.BACKTEST_MIN_WINRATE,
+            )
+            if not gate["pass"]:
+                print(f"Backtest gate failed ({gate['reason']}). HOLD.")
+                self._log(
+                    price,
+                    "HOLD",
+                    confidence,
+                    tech_signal,
+                    ml_prob,
+                    position_qty,
+                    equity,
+                    drawdown,
+                    f"gate_{gate['reason']}",
+                )
+                return
+
         risk_ok = self.risk.allow_trading(equity) and (daily_loss < config.MAX_DAILY_LOSS_PCT)
 
-        position_qty = self.get_position_qty()
         print("\n==============================")
         print(f"Time: {datetime.now(UTC).isoformat()}")
         print(f"Price: {price:.2f} | Position qty: {position_qty:.6f}")
