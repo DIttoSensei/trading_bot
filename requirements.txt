@@ -1,0 +1,8 @@
+alpaca-py
+pandas
+numpy
+scikit-learn
+pandas-ta
+python-dotenv
+gspread
+google-auth
