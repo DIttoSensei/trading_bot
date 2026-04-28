@@ -34,3 +34,16 @@ class Broker:
             return float(pos.qty)
         except Exception:
             return 0.0
+
+    def get_position_info(self, symbol):
+        try:
+            pos = self.client.get_open_position(symbol)
+            return {
+                "qty": float(pos.qty),
+                "avg_entry_price": float(pos.avg_entry_price),
+            }
+        except Exception:
+            return {
+                "qty": 0.0,
+                "avg_entry_price": 0.0,
+            }

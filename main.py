@@ -3,6 +3,7 @@ import os
 import time
 from datetime import UTC, datetime, timedelta
 
+import numpy as np
 import pandas as pd
 from alpaca.data.historical import CryptoHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest
@@ -130,13 +131,23 @@ class TradingBot:
     def get_position_qty(self):
         return self.broker.get_position_qty(self.symbol)
 
-    def compute_buy_qty(self, price, buying_power, equity):
+    def compute_buy_qty(self, price, buying_power, equity, confidence, market_vol, drawdown):
+        baseline_vol = 0.015
+        vol_multiplier = np.clip(baseline_vol / max(market_vol, 1e-6), 0.5, 1.4)
+        confidence_multiplier = np.clip((confidence - 0.5) / 0.15, 0.35, 1.25)
+        drawdown_multiplier = 1.0
+        if drawdown > 0.08:
+            drawdown_multiplier = 0.6
+        elif drawdown > 0.05:
+            drawdown_multiplier = 0.8
+
+        dynamic_fraction = config.POSITION_FRACTION * vol_multiplier * confidence_multiplier * drawdown_multiplier
         dynamic_fraction = min(
-            max(config.POSITION_FRACTION, config.MIN_EQUITY_FRACTION),
+            max(dynamic_fraction, config.MIN_EQUITY_FRACTION),
             config.MAX_EQUITY_FRACTION,
         )
         target_from_equity = equity * dynamic_fraction
-        target_from_buying_power = buying_power * config.POSITION_FRACTION
+        target_from_buying_power = buying_power * dynamic_fraction
         target_notional = min(
             max(target_from_equity, target_from_buying_power),
             config.MAX_NOTIONAL_PER_TRADE,
@@ -154,7 +165,9 @@ class TradingBot:
         price = float(df.iloc[-1]["close"])
         equity, buying_power, daily_loss = self.get_account_state()
         drawdown = self.risk.update(equity)
-        position_qty = self.get_position_qty()
+        position_info = self.broker.get_position_info(self.symbol)
+        position_qty = float(position_info.get("qty", 0.0))
+        live_entry_price = float(position_info.get("avg_entry_price", 0.0))
 
         if len(df) < config.ML_TRAIN_MIN_ROWS:
             print("Not enough data for safe decision. HOLD.")
@@ -181,6 +194,13 @@ class TradingBot:
         decision = self.judge.evaluate(tech_signal, ml_prob, df)
         action = decision["action"]
         confidence = float(decision["confidence"])
+        atr_value = float(
+            (df["high"] - df["low"])
+            .rolling(config.ATR_WINDOW)
+            .mean()
+            .iloc[-1]
+        )
+        atr_pct = atr_value / price if price > 0 else 0.0
 
         if config.ENABLE_BACKTEST_GATE:
             gate = walk_forward_gate(
@@ -211,6 +231,10 @@ class TradingBot:
         print(f"Time: {datetime.now(UTC).isoformat()}")
         print(f"Price: {price:.2f} | Position qty: {position_qty:.6f}")
         print(f"Tech: {tech_signal:.3f} | ML: {ml_prob:.3f} | Confidence: {confidence:.3f}")
+        print(
+            f"Regime: {decision.get('regime', 'unknown')} | Threshold: {float(decision.get('threshold', config.MIN_BUY_CONFIDENCE)):.3f}"
+        )
+        print(f"ATR%: {atr_pct:.3%}")
         print(f"Action: {action} | Drawdown: {drawdown:.3%} | Daily loss: {daily_loss:.3%}")
 
         if not risk_ok:
@@ -218,20 +242,41 @@ class TradingBot:
             print("Risk guard active. HOLD.")
             return
 
-        if action == "BUY" and confidence >= config.MIN_BUY_CONFIDENCE and position_qty <= 0:
-            qty = self.compute_buy_qty(price, buying_power, equity)
+        decision_threshold = float(decision.get("threshold", config.MIN_BUY_CONFIDENCE))
+        market_vol = float(decision.get("volatility", 0.015))
+
+        full_entry_ok = action == "BUY" and confidence >= max(config.MIN_BUY_CONFIDENCE, decision_threshold) and position_qty <= 0
+        probe_entry_ok = (
+            config.ENABLE_PROBE_ENTRY
+            and position_qty <= 0
+            and confidence >= config.PROBE_CONFIDENCE
+            and tech_signal >= config.PROBE_TECH_MIN
+            and ml_prob >= config.PROBE_ML_MIN
+        )
+
+        if full_entry_ok or probe_entry_ok:
+            qty = self.compute_buy_qty(price, buying_power, equity, confidence, market_vol, drawdown)
+            if probe_entry_ok and not full_entry_ok:
+                qty = round(max(qty * config.PROBE_SIZE_MULTIPLIER, 0.0), 6)
             if qty > 0:
                 self.broker.submit_order(self.symbol, "BUY", qty)
                 self.entry_price = price
                 print(f"BUY executed: {qty} (notional ~ {qty * price:.2f})")
-                self._log(price, "BUY", confidence, tech_signal, ml_prob, qty, equity, drawdown, "entry")
+                note = "entry" if full_entry_ok else "probe_entry"
+                self._log(price, "BUY", confidence, tech_signal, ml_prob, qty, equity, drawdown, note)
             else:
                 self._log(price, "HOLD", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, "small_notional")
         elif position_qty > 0:
-            pnl = 0.0 if not self.entry_price else (price - self.entry_price) / self.entry_price
+            entry_ref = live_entry_price if live_entry_price > 0 else self.entry_price
+            pnl = 0.0 if not entry_ref else (price - entry_ref) / entry_ref
             exit_on_signal = action == "SELL" and confidence > 0.5
-            exit_on_tp = pnl >= config.TAKE_PROFIT_PCT
-            exit_on_sl = pnl <= -config.STOP_LOSS_PCT
+            stop_loss_pct = config.STOP_LOSS_PCT
+            take_profit_pct = config.TAKE_PROFIT_PCT
+            if config.ENABLE_ATR_EXITS and atr_pct > 0:
+                stop_loss_pct = max(config.STOP_LOSS_PCT, config.ATR_STOP_MULTIPLIER * atr_pct)
+                take_profit_pct = max(config.TAKE_PROFIT_PCT, config.ATR_TP_MULTIPLIER * atr_pct)
+            exit_on_tp = pnl >= take_profit_pct
+            exit_on_sl = pnl <= -stop_loss_pct
             if exit_on_signal or exit_on_tp or exit_on_sl:
                 self.broker.submit_order(self.symbol, "SELL", position_qty)
                 note = "signal_exit" if exit_on_signal else ("take_profit" if exit_on_tp else "stop_loss")

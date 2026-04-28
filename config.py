@@ -26,6 +26,15 @@ STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.02"))
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "0.10"))
 MIN_BUY_CONFIDENCE = float(os.getenv("MIN_BUY_CONFIDENCE", "0.56"))
 MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.04"))
+ENABLE_PROBE_ENTRY = os.getenv("ENABLE_PROBE_ENTRY", "true").lower() == "true"
+PROBE_CONFIDENCE = float(os.getenv("PROBE_CONFIDENCE", "0.535"))
+PROBE_TECH_MIN = float(os.getenv("PROBE_TECH_MIN", "0.05"))
+PROBE_ML_MIN = float(os.getenv("PROBE_ML_MIN", "0.51"))
+PROBE_SIZE_MULTIPLIER = float(os.getenv("PROBE_SIZE_MULTIPLIER", "0.35"))
+ENABLE_ATR_EXITS = os.getenv("ENABLE_ATR_EXITS", "true").lower() == "true"
+ATR_WINDOW = int(os.getenv("ATR_WINDOW", "14"))
+ATR_STOP_MULTIPLIER = float(os.getenv("ATR_STOP_MULTIPLIER", "2.2"))
+ATR_TP_MULTIPLIER = float(os.getenv("ATR_TP_MULTIPLIER", "4.8"))
 
 # Backtest gate
 ENABLE_BACKTEST_GATE = os.getenv("ENABLE_BACKTEST_GATE", "false").lower() == "true"

@@ -5,7 +5,7 @@ import numpy as np
 
 class LLMJudge:
     def __init__(self):
-        self.base_threshold = 0.55   # easier to trigger trades
+        self.base_threshold = 0.55
         self.risk_per_trade = 0.02
 
     def detect_regime(self, df):
@@ -43,10 +43,18 @@ class LLMJudge:
 
         confidence = float(np.clip(confidence, 0, 1))
 
-        # ===== 🔥 NEW DECISION RULE =====
-        if confidence > self.base_threshold:
+        # Dynamic thresholding by market regime.
+        regime = "trend" if abs(trend) >= 0.01 else "range"
+        dynamic_threshold = self.base_threshold
+        if regime == "trend":
+            dynamic_threshold -= 0.02
+        if volatility > 0.025:
+            dynamic_threshold += 0.02
+        dynamic_threshold = float(np.clip(dynamic_threshold, 0.51, 0.62))
+
+        if confidence > dynamic_threshold:
             action = 'BUY'
-        elif confidence < (1 - self.base_threshold):
+        elif confidence < (1 - dynamic_threshold):
             action = 'SELL'
         else:
             action = 'HOLD'
@@ -56,6 +64,8 @@ class LLMJudge:
         return {
             "action": action,
             "confidence": confidence,
+            "threshold": dynamic_threshold,
+            "regime": regime,
             "volatility": volatility,
             "trend": trend,
             "tech_strength": tech_strength,
