@@ -15,7 +15,7 @@ def technical_bot(df):
     data['rsi'] = ta.rsi(data['close'], length=14)
     rsi = data['rsi'].iloc[-1]
     if pd.notna(rsi):
-        rsi_signal = (50 - rsi) / 50
+        rsi_signal = (rsi - 50) / 50
     else:
         rsi_signal = 0
 
@@ -117,8 +117,8 @@ def technical_bot(df):
 
     # 6. Volume Profile (volume compared to 20-period average)
     data['volume_ma'] = data['volume'].rolling(20).mean()
-    vol_ratio = data['volume'].iloc[-1] / data['volume_ma'].iloc[-1] if data['volume_ma'].iloc[-1] > 0 else 1
-    vol_signal = np.tanh(vol_ratio - 1)  # >0 if volume above average
+    price_change = data['close'].iloc[-1] - data['close'].iloc[-2]
+    vol_signal = np.tanh(vol_ratio - 1) * np.sign(price_change)
 
     # Dynamic weights: more weight to RSI and MACD in trending markets
     trend_strength = abs(macd_signal)  # MACD magnitude indicates trend
