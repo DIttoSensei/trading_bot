@@ -1,6 +1,5 @@
 import os
 
-
 class GoogleSheetLogger:
     def __init__(self, credentials_file: str, sheet_name: str):
         self.enabled = False
@@ -31,25 +30,34 @@ class GoogleSheetLogger:
             sheet = client.create(sheet_name)
 
         self.worksheet = sheet.sheet1
-        if self.worksheet.row_count < 2 or not self.worksheet.row_values(1):
-            self.worksheet.append_row(
-                [
-                    "timestamp_utc",
-                    "symbol",
-                    "price",
-                    "action",
-                    "confidence",
-                    "tech_signal",
-                    "ml_prob",
-                    "position_qty",
-                    "equity",
-                    "drawdown",
-                    "traded",
-                    "regime",
-                    "threshold",
-                    "note",
+        
+        # Readable Header Update
+        # We check the first cell. If it's empty or not our expected header, we write it.
+        try:
+            first_row = self.worksheet.row_values(1)
+            if not first_row or first_row[0] != "Timestamp (UTC)":
+                header = [
+                    "Timestamp (UTC)",
+                    "Asset",            # Changed from 'symbol' for readability
+                    "Current Price",
+                    "Action Taken",     # BUY/SELL/HOLD
+                    "Decision Conf %",  # Easier to read than 'confidence'
+                    "Tech Signal",
+                    "ML Probability",
+                    "Units Held",
+                    "Total Equity",
+                    "Portfolio Drawdown",
+                    "Order Executed",   # Boolean 1/0
+                    "Market Regime",
+                    "Strategy Threshold",
+                    "Trade Note"
                 ]
-            )
+                # If the sheet is brand new, append_row works. 
+                # If we're updating an old sheet, we use update('A1', [header])
+                self.worksheet.insert_row(header, 1)
+        except Exception as e:
+            print(f"Header initialization error: {e}")
+
         self.enabled = True
         print(f"Google Sheets logging enabled: {sheet_name}")
 
@@ -57,6 +65,7 @@ class GoogleSheetLogger:
         if not self.enabled or self.worksheet is None:
             return
         try:
-            self.worksheet.append_row(row, value_input_option="RAW")
+            # We use USER_ENTERED so numbers look like numbers and dates like dates
+            self.worksheet.append_row(row, value_input_option="USER_ENTERED")
         except Exception as exc:
             print(f"Sheets log failed: {exc}")
