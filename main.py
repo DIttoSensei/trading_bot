@@ -90,6 +90,27 @@ class TradingBot:
             writer.writerow(row)
         self.sheet_logger.log_row(row)
 
+    def _log_hold_event(self, note: str, price: float = 0.0):
+        try:
+            equity, _, _ = self.get_account_state()
+            drawdown = self.risk.update(equity)
+            position_qty = self.get_position_qty()
+        except Exception:
+            equity = 0.0
+            drawdown = 0.0
+            position_qty = 0.0
+        self._log(
+            price=price,
+            action="HOLD",
+            confidence=0.0,
+            tech_signal=0.0,
+            ml_prob=0.0,
+            position_qty=position_qty,
+            equity=equity,
+            drawdown=drawdown,
+            note=note,
+        )
+
     def fetch_data(self) -> pd.DataFrame:
         end = datetime.now(UTC)
         start = end - timedelta(hours=config.LOOKBACK_HOURS)
@@ -148,6 +169,8 @@ class TradingBot:
     def evaluate_and_trade(self, df: pd.DataFrame):
         if len(df) < config.ML_TRAIN_MIN_ROWS:
             print("Not enough data for safe decision. HOLD.")
+            last_price = float(df.iloc[-1]["close"]) if len(df) else 0.0
+            self._log_hold_event("not_enough_data", last_price)
             return
 
         if self.should_retrain():
@@ -163,6 +186,8 @@ class TradingBot:
         )
         if not gate["pass"]:
             print(f"Backtest gate failed ({gate['reason']}). HOLD.")
+            gate_price = float(df.iloc[-1]["close"]) if len(df) else 0.0
+            self._log_hold_event(f"gate_{gate['reason']}", gate_price)
             return
 
         row = df.iloc[-1]
@@ -176,6 +201,7 @@ class TradingBot:
         feat = feat.dropna()
         if feat.empty:
             print("Feature frame empty after engineering. HOLD.")
+            self._log_hold_event("feature_frame_empty", price)
             return
 
         ml_prob = float(self.ml.predict(feat.iloc[-1]))
