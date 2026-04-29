@@ -301,15 +301,33 @@ class TradingBot:
         else:
             self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, False, str(decision.get("regime", "unknown")), decision_threshold, "no_setup")
 
+    # Fix: Added pre-flight check to sync with Alpaca wallet at startup
+    def pre_flight_check(self):
+        print("\n--- [STARTUP] Pre-Flight Position Audit ---")
+        for symbol in self.symbols:
+            position_info = self.broker.get_position_info(symbol)
+            qty = position_info["qty"]
+            
+            if qty > 0:
+                print(f"Found existing position: {qty} units of {symbol}")
+                df = self.fetch_data(symbol)
+                if df is not None and not df.empty:
+                    self.evaluate_and_trade(symbol, df)
+                else:
+                    print(f"Could not fetch data for {symbol}. Keeping position.")
+            else:
+                print(f"No existing position found for {symbol}.")
+        print("--- Audit Complete. Entering Main Loop. ---\n")
+
     def run(self):
         print("=== Self-Reliant Paper Trading Bot Started ===")
         print(f"Symbols: {', '.join(self.symbols)} | Decision interval: {config.DECISION_INTERVAL_HOURS}h")
 
+        # Fix: Run the audit before the main loop
+        self.pre_flight_check()
+
         if config.BOT_RUN_ONCE:
-            print("BOT_RUN_ONCE enabled. Running a single cycle.")
-            for symbol in self.symbols:
-                df = self.fetch_data(symbol)
-                self.evaluate_and_trade(symbol, df)
+            print("BOT_RUN_ONCE enabled. Finished single cycle.")
             return
 
         while True:
@@ -321,7 +339,7 @@ class TradingBot:
                         self.evaluate_and_trade(symbol, df)
                     self.next_decision_at = now + timedelta(hours=config.DECISION_INTERVAL_HOURS)
                 else:
-                    print(f"Data refreshed at {now.isoformat()}. Next decision: {self.next_decision_at.isoformat()}")
+                    print(f"Waiting for decision time. Next: {self.next_decision_at.isoformat()}")
             except Exception as exc:
                 print(f"Loop error: {exc}")
             time.sleep(max(60, config.DATA_REFRESH_MINUTES * 60))
