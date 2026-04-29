@@ -3,7 +3,7 @@ import numpy as np
 
 class LLMJudge:
     def __init__(self):
-        self.base_threshold = 0.55
+        self.base_threshold = 0.51
         self.risk_per_trade = 0.02
 
     def run_shadow_simulations(self, current_price, df, hours_ahead=12, simulations=1000):
