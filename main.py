@@ -167,7 +167,7 @@ class TradingBot:
 
     def evaluate_and_trade(self, symbol: str, df: pd.DataFrame):
         if df is None or df.empty:
-            print(f"{symbol}: No market data fetched. HOLD.")
+            print(f"{symbol}: No market data. HOLD.")
             return
 
         price = float(df.iloc[-1]["close"])
@@ -178,16 +178,16 @@ class TradingBot:
         live_entry_price = float(position_info.get("avg_entry_price", 0.0))
 
         if len(df) < config.ML_TRAIN_MIN_ROWS:
-            print("Not enough data for safe decision. HOLD.")
-            self._log(symbol, price, "HOLD", 0.5, 0.0, 0.5, position_qty, equity, drawdown, False, "unknown", config.MIN_BUY_CONFIDENCE, "not_enough_data")
+            print("Warming up data... HOLD.")
             return
 
         if self.should_retrain(symbol):
-            print(f"{symbol}: Retraining ML model...")
             self.train_model(symbol, df)
 
+        # Layers
         tech_signal = float(technical_bot(df))
-
+        
+        # Feature engineering for ML
         feat = df.copy()
         feat["return"] = feat["close"].pct_change()
         feat["momentum_3h"] = feat["close"] - feat["close"].shift(3)
@@ -195,112 +195,52 @@ class TradingBot:
         feat["volatility_24h"] = feat["return"].rolling(24).std()
         feat["ma_50_dist"] = feat["close"] / feat["close"].rolling(50).mean()
         feat = feat.dropna()
-        if feat.empty:
-            print("Feature frame empty after engineering. HOLD.")
-            self._log(symbol, price, "HOLD", 0.5, tech_signal, 0.5, position_qty, equity, drawdown, False, "unknown", config.MIN_BUY_CONFIDENCE, "feature_frame_empty")
-            return
-
+        
         ml_prob = float(self.ml_models[symbol].predict(feat.iloc[-1]))
+        
+        # --- THE SHADOW JUDGE ---
         decision = self.judge.evaluate(tech_signal, ml_prob, df)
         action = decision["action"]
         confidence = float(decision["confidence"])
-        atr_value = float(
-            (df["high"] - df["low"])
-            .rolling(config.ATR_WINDOW)
-            .mean()
-            .iloc[-1]
-        )
-        atr_pct = atr_value / price if price > 0 else 0.0
-
-        if config.ENABLE_BACKTEST_GATE:
-            gate = walk_forward_gate(
-                df,
-                min_rows=config.ML_TRAIN_MIN_ROWS,
-                test_window=config.BACKTEST_TEST_WINDOW,
-                min_signals=config.BACKTEST_MIN_SIGNALS,
-                min_winrate=config.BACKTEST_MIN_WINRATE,
-            )
-            if not gate["pass"]:
-                print(f"Backtest gate failed ({gate['reason']}). HOLD.")
-                self._log(
-                    symbol,
-                    price,
-                    "HOLD",
-                    confidence,
-                    tech_signal,
-                    ml_prob,
-                    position_qty,
-                    equity,
-                    drawdown,
-                    False,
-                    str(decision.get("regime", "unknown")),
-                    float(decision.get("threshold", config.MIN_BUY_CONFIDENCE)),
-                    f"gate_{gate['reason']}",
-                )
-                return
-
         decision_threshold = float(decision.get("threshold", config.MIN_BUY_CONFIDENCE))
-        market_vol = float(decision.get("volatility", 0.015))
-        risk_ok = self.risk.allow_trading(equity) and (daily_loss < config.MAX_DAILY_LOSS_PCT)
-
+        
+        # Display the Monster's Thought Process
         print("\n==============================")
         print(f"Time: {datetime.now(UTC).isoformat()}")
-        print(f"{symbol} | Price: {price:.2f} | Position qty: {position_qty:.6f}")
-        print(f"Tech: {tech_signal:.3f} | ML: {ml_prob:.3f} | Confidence: {confidence:.3f}")
-        print(
-            f"Regime: {decision.get('regime', 'unknown')} | Threshold: {float(decision.get('threshold', config.MIN_BUY_CONFIDENCE)):.3f}"
-        )
-        print(f"ATR%: {atr_pct:.3%}")
-        print(f"Action: {action} | Drawdown: {drawdown:.3%} | Daily loss: {daily_loss:.3%}")
+        print(f"{symbol} | Price: {price:.2f} | Balance: {equity:.2f}")
+        print(f"Shadow Win Prob: {decision.get('shadow_win_prob', 0):.3f} | Confidence: {confidence:.3f}")
+        print(f"Shadow Target: ${decision.get('expected_future_price', 0):.2f}")
+        print(f"Regime: {decision.get('regime', 'unknown')} | Threshold: {decision_threshold:.3f}")
+        print(f"Action: {action} | Drawdown: {drawdown:.3%}")
 
+        risk_ok = self.risk.allow_trading(equity) and (daily_loss < config.MAX_DAILY_LOSS_PCT)
         if not risk_ok:
-            self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, False, str(decision.get("regime", "unknown")), decision_threshold, "risk_pause")
-            print("Risk guard active. HOLD.")
+            print("Risk Guard Active. HOLD.")
             return
 
-        full_entry_ok = action == "BUY" and confidence >= max(config.MIN_BUY_CONFIDENCE, decision_threshold) and position_qty <= 0
-        probe_entry_ok = (
-            config.ENABLE_PROBE_ENTRY
-            and position_qty <= 0
-            and confidence >= config.PROBE_CONFIDENCE
-            and tech_signal >= config.PROBE_TECH_MIN
-            and ml_prob >= config.PROBE_ML_MIN
-        )
-
-        if full_entry_ok or probe_entry_ok:
-            qty = self.compute_buy_qty(price, buying_power, equity, confidence, market_vol, drawdown)
-            if probe_entry_ok and not full_entry_ok:
-                qty = round(max(qty * config.PROBE_SIZE_MULTIPLIER, 0.0), 6)
+        # Buy Logic
+        if action == "BUY" and confidence >= decision_threshold and position_qty <= 0:
+            qty = self.compute_buy_qty(price, buying_power, equity, confidence, 0.015, drawdown)
             if qty > 0:
                 self.broker.submit_order(symbol, "BUY", qty)
                 self.entry_price[symbol] = price
-                print(f"BUY executed: {qty} (notional ~ {qty * price:.2f})")
-                note = "entry" if full_entry_ok else "probe_entry"
-                self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, str(decision.get("regime", "unknown")), decision_threshold, note)
-            else:
-                self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, False, str(decision.get("regime", "unknown")), decision_threshold, "small_notional")
+                self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, decision['regime'], decision_threshold, "shadow_entry")
+
+        # Sell/Hold Logic
         elif position_qty > 0:
             entry_ref = live_entry_price if live_entry_price > 0 else self.entry_price.get(symbol)
-            pnl = 0.0 if not entry_ref else (price - entry_ref) / entry_ref
-            exit_on_signal = action == "SELL" and confidence > 0.5
-            stop_loss_pct = config.STOP_LOSS_PCT
-            take_profit_pct = config.TAKE_PROFIT_PCT
-            if config.ENABLE_ATR_EXITS and atr_pct > 0:
-                stop_loss_pct = max(config.STOP_LOSS_PCT, config.ATR_STOP_MULTIPLIER * atr_pct)
-                take_profit_pct = max(config.TAKE_PROFIT_PCT, config.ATR_TP_MULTIPLIER * atr_pct)
-            exit_on_tp = pnl >= take_profit_pct
-            exit_on_sl = pnl <= -stop_loss_pct
-            if exit_on_signal or exit_on_tp or exit_on_sl:
+            pnl = (price - entry_ref) / entry_ref if entry_ref else 0
+            
+            # The bot sells if the Shadow Signal turns negative OR if hard stops hit
+            exit_on_signal = action == "SELL"
+            exit_on_sl = pnl <= -config.STOP_LOSS_PCT
+            
+            if exit_on_signal or exit_on_sl:
                 self.broker.submit_order(symbol, "SELL", position_qty)
-                note = "signal_exit" if exit_on_signal else ("take_profit" if exit_on_tp else "stop_loss")
-                print(f"SELL executed: {position_qty} ({note})")
-                self.entry_price[symbol] = None
-                self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, True, str(decision.get("regime", "unknown")), decision_threshold, note)
+                note = "shadow_exit" if exit_on_signal else "stop_loss"
+                self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, True, decision['regime'], decision_threshold, note)
             else:
-                self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, False, str(decision.get("regime", "unknown")), decision_threshold, "in_position")
-        else:
-            self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, False, str(decision.get("regime", "unknown")), decision_threshold, "no_setup")
-
+                self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, False, decision['regime'], decision_threshold, "shadow_holding")
     # Fix: Added pre-flight check to sync with Alpaca wallet at startup
     def pre_flight_check(self):
         print("\n--- [STARTUP] Pre-Flight Position Audit ---")
