@@ -6,7 +6,7 @@ class LLMJudge:
         self.base_threshold = 0.55
         self.risk_per_trade = 0.02
 
-    def run_shadow_simulations(self, current_price, df, hours_ahead=4, simulations=1000):
+    def run_shadow_simulations(self, current_price, df, hours_ahead=12, simulations=1000):
         """
         Runs 1,000 parallel futures based on historical volatility.
         This is the 'Foreshadowing' engine.
