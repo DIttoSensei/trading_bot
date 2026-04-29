@@ -13,9 +13,6 @@ class Broker:
     def submit_order(self, symbol, side, qty):
         qty = round(float(qty), 4)
 
-        # For Crypto, GTC is almost always required.
-        # If Alpaca specifically requires DAY for fractional on certain pairs, 
-        # check their latest docs, but for BTC/USD, GTC is the standard.
         order = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
@@ -26,21 +23,23 @@ class Broker:
         return self.client.submit_order(order_data=order)
 
     def get_position_qty(self, symbol):
-        try:
-            pos = self.client.get_open_position(symbol)
-            return float(pos.qty)
-        except Exception:
-            return 0.0
+        # Fix: Try both formatted and unformatted symbols to ensure sync
+        info = self.get_position_info(symbol)
+        return info["qty"]
 
     def get_position_info(self, symbol):
-        try:
-            pos = self.client.get_open_position(symbol)
-            return {
-                "qty": float(pos.qty),
-                "avg_entry_price": float(pos.avg_entry_price),
-            }
-        except Exception:
-            return {
-                "qty": 0.0,
-                "avg_entry_price": 0.0,
-            }
+        # Fix: Alpaca API sometimes requires 'BTCUSD' instead of 'BTC/USD'
+        formats = [symbol, symbol.replace("/", "")]
+        for s in formats:
+            try:
+                pos = self.client.get_open_position(s)
+                return {
+                    "qty": float(pos.qty),
+                    "avg_entry_price": float(pos.avg_entry_price),
+                }
+            except Exception:
+                continue
+        return {
+            "qty": 0.0,
+            "avg_entry_price": 0.0,
+        }
