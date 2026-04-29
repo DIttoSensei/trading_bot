@@ -222,10 +222,16 @@ class TradingBot:
         if action == "BUY" and confidence >= decision_threshold and position_qty <= 0:
             qty = self.compute_buy_qty(price, buying_power, equity, confidence, 0.015, drawdown)
             if qty > 0:
-                self.broker.submit_order(symbol, "BUY", qty)
-                self.entry_price[symbol] = price
-                self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, decision['regime'], decision_threshold, "shadow_entry")
-
+                self.broker.submit_order(
+                    symbol=symbol,
+                    qty=qty,
+                    side="buy",
+                    type="market",
+                    time_in_force="gtc",
+                    order_class="bracket", # This links the buy to the safety exits
+                    stop_loss={'stop_price': price * (1 - config.STOP_LOSS_PCT)},
+                    take_profit={'limit_price': price * (1 + config.TAKE_PROFIT_PCT)}
+                )
         # Sell/Hold Logic
         elif position_qty > 0:
             entry_ref = live_entry_price if live_entry_price > 0 else self.entry_price.get(symbol)
