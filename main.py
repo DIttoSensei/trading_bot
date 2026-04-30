@@ -199,7 +199,7 @@ class TradingBot:
         ml_prob = float(self.ml_models[symbol].predict(feat.iloc[-1]))
         
         # --- THE SHADOW JUDGE ---
-        decision = self.judge.evaluate(tech_signal, ml_prob, df)
+        decision = self.judge.evaluate(symbol,tech_signal, ml_prob, df)
         action = decision["action"]
         confidence = float(decision["confidence"])
         decision_threshold = float(decision.get("threshold", config.MIN_BUY_CONFIDENCE))
