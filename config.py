@@ -17,7 +17,7 @@ MIN_NOTIONAL_PER_TRADE = float(os.getenv("MIN_NOTIONAL_PER_TRADE", "50"))
 # Timing
 DATA_REFRESH_MINUTES = int(os.getenv("DATA_REFRESH_MINUTES", "15"))
 DECISION_INTERVAL_HOURS = int(os.getenv("DECISION_INTERVAL_HOURS", "1"))
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "1440"))
+LOOKBACK_HOURS = 26280
 MODEL_RETRAIN_HOURS = int(os.getenv("MODEL_RETRAIN_HOURS", "24"))
 BOT_RUN_ONCE = os.getenv("BOT_RUN_ONCE", "false").lower() == "true"
 
