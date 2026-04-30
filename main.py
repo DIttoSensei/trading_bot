@@ -40,7 +40,6 @@ class TradingBot:
         self.risk = RiskManager(max_drawdown=config.MAX_DRAWDOWN)
 
         self.last_retrain_at = {}
-        self.next_decision_at = datetime.now(UTC)
         self.day_start_equity = None
 
         self.journal_path = os.path.join(os.path.dirname(__file__), config.TRADE_LOG_CSV)
@@ -57,7 +56,22 @@ class TradingBot:
                 writer.writerow(["timestamp_utc", "symbol", "price", "action", "confidence", "tech_signal", "ml_prob", "position_qty", "equity", "drawdown", "traded", "regime", "threshold", "note"])
 
     def _log(self, symbol, price, action, confidence, tech_signal, ml_prob, position_qty, equity, drawdown, traded, regime, threshold, note):
-        row = [datetime.now(UTC).isoformat(), symbol, round(float(price), 6), action, round(float(confidence), 6), round(float(tech_signal), 6), round(float(ml_prob), 6), round(float(position_qty), 6), round(float(equity), 2), round(float(drawdown), 6), int(bool(traded)), regime, round(float(threshold), 6), note]
+        row = [
+            datetime.now(UTC).isoformat(), 
+            symbol, 
+            round(float(price), 6), 
+            action, 
+            round(float(confidence), 6), 
+            round(float(tech_signal), 6), 
+            round(float(ml_prob), 6), 
+            round(float(position_qty), 6), 
+            round(float(equity), 2), 
+            round(float(drawdown), 6), 
+            int(bool(traded)), 
+            regime, 
+            round(float(threshold), 6), 
+            note
+        ]
         with open(self.journal_path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(row)
@@ -87,10 +101,10 @@ class TradingBot:
         vol_multiplier = np.clip(0.015 / max(market_vol, 1e-6), 0.5, 1.4)
         confidence_multiplier = np.clip((confidence - 0.5) / 0.15, 0.35, 1.25)
         drawdown_multiplier = 0.6 if drawdown > 0.08 else (0.8 if drawdown > 0.05 else 1.0)
-        
+
         dynamic_fraction = np.clip(config.POSITION_FRACTION * vol_multiplier * confidence_multiplier * drawdown_multiplier, config.MIN_EQUITY_FRACTION, config.MAX_EQUITY_FRACTION)
         target_notional = np.clip(equity * dynamic_fraction, config.MIN_NOTIONAL_PER_TRADE, config.MAX_NOTIONAL_PER_TRADE)
-        
+
         return round(target_notional / price, 6) if target_notional <= buying_power else 0.0
 
     def evaluate_and_trade(self, symbol: str, df: pd.DataFrame):
@@ -104,27 +118,34 @@ class TradingBot:
         entry_price = float(pos.get("avg_entry_price", 0.0))
 
         if self.should_retrain(symbol): self.train_model(symbol, df)
-        
+
+        # 1. Generate Signals
         tech_signal = float(technical_bot(df))
+        
+        # ML Feature Prep
         feat = df.copy()
         feat["return"] = feat["close"].pct_change()
         feat["momentum_3h"] = feat["close"] - feat["close"].shift(3)
         feat["momentum_24h"] = feat["close"] - feat["close"].shift(24)
         feat["volatility_24h"] = feat["return"].rolling(24).std()
         feat["ma_50_dist"] = feat["close"] / feat["close"].rolling(50).mean()
+        
         ml_prob = float(self.ml_models[symbol].predict(feat.dropna().iloc[-1]))
 
-        # The Judge
+        # 2. The Judge Decision (Integrates Shadow Simulations)
         decision = self.judge.evaluate(symbol, tech_signal, ml_prob, df)
-        action, confidence, threshold = decision["action"], decision["confidence"], decision["threshold"]
+        action = decision["action"]
+        confidence = decision["confidence"]
+        threshold = decision["threshold"]
+        shadow_risk = decision.get("shadow_risk_floor", price * 0.95)
 
-        print(f"\n[{symbol}] Price: {price} | Conf: {confidence:.3f} | Action: {action}")
+        print(f"[{symbol}] Price: {price:.2f} | Conf: {confidence:.3f} | Forecast: {decision['expected_future_price']:.2f}")
 
         if not (self.risk.allow_trading(equity) and (daily_loss < config.MAX_DAILY_LOSS_PCT)):
-            print("Risk Guard Active.")
+            print(f"Risk Guard Active for {symbol}. Trading paused.")
             return
 
-        # EXECUTION
+        # 3. Execution Logic
         if action == "BUY" and position_qty <= 0:
             qty = self.compute_buy_qty(price, buying_power, equity, confidence, 0.015, drawdown)
             if qty > 0:
@@ -136,14 +157,18 @@ class TradingBot:
 
         elif position_qty > 0:
             pnl = (price - entry_price) / entry_price if entry_price > 0 else 0
+            
+            # Exit Triggers
             exit_sl = pnl <= -config.STOP_LOSS_PCT
             exit_tp = pnl >= config.TAKE_PROFIT_PCT
-            exit_sig = action == "SELL"
+            exit_sig = (action == "SELL")
+            # Predictive Exit: If current price breaks the simulated 'worst-case' floor
+            exit_shadow = price < shadow_risk 
 
-            if exit_sl or exit_tp or exit_sig:
+            if exit_sl or exit_tp or exit_sig or exit_shadow:
                 try:
                     self.broker.submit_order(symbol=symbol, qty=position_qty, side="sell", type="market", time_in_force="gtc")
-                    reason = "stop_loss" if exit_sl else ("take_profit" if exit_tp else "shadow_exit")
+                    reason = "stop_loss" if exit_sl else ("take_profit" if exit_tp else ("shadow_floor_break" if exit_shadow else "shadow_exit"))
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, True, decision['regime'], threshold, reason)
                 except Exception as e:
                     print(f"Exit Error: {e}")
@@ -159,25 +184,29 @@ class TradingBot:
         self.ml_models[symbol].train_price_model(df)
         self.last_retrain_at[symbol] = datetime.now(UTC)
 
-    def pre_flight_check(self):
-        print("\n--- [STARTUP] Pre-Flight Position Audit ---")
-        for s in self.symbols:
-            qty = float(self.broker.get_position_info(s).get("qty", 0))
-            if qty > 0:
-                print(f"Managing existing {s}: {qty} units.")
-                df = self.fetch_data(s)
-                if df is not None: self.evaluate_and_trade(s, df)
-        print("--- Audit Complete ---\n")
-
     def run(self):
         print("=== Self-Reliant Trading Bot Started ===")
-        self.pre_flight_check()
-        if config.BOT_RUN_ONCE: return
+        
+        # Primary Loop: Iterates through all coins in config
+        for s in self.symbols:
+            print(f"\n--- Checking {s} ---")
+            df = self.fetch_data(s)
+            if df is not None:
+                self.evaluate_and_trade(s, df)
+            else:
+                print(f"Warning: No data returned for {s}")
+        
+        print("\n--- Cycle Complete ---")
+        
+        if config.BOT_RUN_ONCE: 
+            return
+        
         while True:
+            time.sleep(config.DECISION_INTERVAL_HOURS * 3600)
             for s in self.symbols:
                 df = self.fetch_data(s)
-                if df is not None: self.evaluate_and_trade(s, df)
-            time.sleep(config.DECISION_INTERVAL_HOURS * 3600)
+                if df is not None: 
+                    self.evaluate_and_trade(s, df)
 
 if __name__ == "__main__":
     TradingBot().run()
