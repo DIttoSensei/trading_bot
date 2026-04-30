@@ -7,12 +7,12 @@ ALPACA_PAPER = True
 
 # Core trading setup (aggressive but controlled, no leverage)
 SYMBOL = os.getenv("TRADE_SYMBOL", "BTC/USD")
-TRADE_SYMBOLS = ["BTC/USD", "SOL/USD", "DOGE/USD", "PEPE/USD"]
-POSITION_FRACTION = float(os.getenv("POSITION_FRACTION", "0.70"))
+TRADE_SYMBOLS = ["BTC/USD", "SOL/USD", "DOGE/USD"]
+POSITION_FRACTION = float(os.getenv("POSITION_FRACTION", "0.10"))
 MIN_EQUITY_FRACTION = float(os.getenv("MIN_EQUITY_FRACTION", "0.20"))
 MAX_EQUITY_FRACTION = float(os.getenv("MAX_EQUITY_FRACTION", "1.00"))  # no leverage, up to full equity
-MAX_NOTIONAL_PER_TRADE = float(os.getenv("MAX_NOTIONAL_PER_TRADE", "30000"))
-MIN_NOTIONAL_PER_TRADE = float(os.getenv("MIN_NOTIONAL_PER_TRADE", "50"))
+MAX_NOTIONAL_PER_TRADE = float(os.getenv("MAX_NOTIONAL_PER_TRADE", "1000000"))
+MIN_NOTIONAL_PER_TRADE = float(os.getenv("MIN_NOTIONAL_PER_TRADE", "10"))
 
 # Timing
 DATA_REFRESH_MINUTES = int(os.getenv("DATA_REFRESH_MINUTES", "15"))
