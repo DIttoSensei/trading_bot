@@ -17,9 +17,6 @@ from ml_layer import MLSpecialist
 from risk import RiskManager
 from sheet_logger import GoogleSheetLogger
 
-if config.ENABLE_BACKTEST_GATE:
-    from backtester import walk_forward_gate
-
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -98,14 +95,34 @@ class TradingBot:
         return equity, buying_power, daily_loss
 
     def compute_buy_qty(self, price, buying_power, equity, confidence, market_vol, drawdown):
-        vol_multiplier = np.clip(0.015 / max(market_vol, 1e-6), 0.5, 1.4)
-        confidence_multiplier = np.clip((confidence - 0.5) / 0.15, 0.35, 1.25)
-        drawdown_multiplier = 0.6 if drawdown > 0.08 else (0.8 if drawdown > 0.05 else 1.0)
+        """
+        DYNAMIC POSITION SIZING:
+        Scales the trade based on a % of total account equity.
+        """
+        # 1. Base Risk (Percentage of total account per trade)
+        risk_fraction = config.POSITION_FRACTION # Suggest 0.05 to 0.10
+        
+        # 2. Confidence Adjustment
+        # If confidence is 0.7, multiplier is ~1.3. If 0.5, multiplier is 1.0.
+        conf_multiplier = np.clip((confidence - 0.5) / 0.15, 0.5, 1.5)
+        
+        # 3. Market Volatility Adjustment
+        vol_multiplier = np.clip(0.015 / max(market_vol, 1e-6), 0.7, 1.3)
 
-        dynamic_fraction = np.clip(config.POSITION_FRACTION * vol_multiplier * confidence_multiplier * drawdown_multiplier, config.MIN_EQUITY_FRACTION, config.MAX_EQUITY_FRACTION)
-        target_notional = np.clip(equity * dynamic_fraction, config.MIN_NOTIONAL_PER_TRADE, config.MAX_NOTIONAL_PER_TRADE)
+        # 4. Final Notional Calculation
+        target_notional = equity * risk_fraction * conf_multiplier * vol_multiplier
+        
+        # 5. Cap by configured MAX and available buying power
+        target_notional = min(target_notional, config.MAX_NOTIONAL_PER_TRADE)
+        
+        # Hard safety: Never use more than 95% of actual available cash
+        max_allowed = buying_power * 0.95
+        final_notional = min(target_notional, max_allowed)
 
-        return round(target_notional / price, 6) if target_notional <= buying_power else 0.0
+        if final_notional < config.MIN_NOTIONAL_PER_TRADE:
+            return 0.0
+
+        return round(final_notional / price, 6)
 
     def evaluate_and_trade(self, symbol: str, df: pd.DataFrame):
         if df is None or df.empty: return
@@ -119,10 +136,9 @@ class TradingBot:
 
         if self.should_retrain(symbol): self.train_model(symbol, df)
 
-        # 1. Generate Signals
+        # 1. SIGNAL GENERATION
         tech_signal = float(technical_bot(df))
         
-        # ML Feature Prep
         feat = df.copy()
         feat["return"] = feat["close"].pct_change()
         feat["momentum_3h"] = feat["close"] - feat["close"].shift(3)
@@ -132,25 +148,31 @@ class TradingBot:
         
         ml_prob = float(self.ml_models[symbol].predict(feat.dropna().iloc[-1]))
 
-        # 2. The Judge Decision (Integrates Shadow Simulations)
+        # 2. JUDGE & SHADOW FORECAST
         decision = self.judge.evaluate(symbol, tech_signal, ml_prob, df)
         action = decision["action"]
         confidence = decision["confidence"]
         threshold = decision["threshold"]
+        
+        # GLITCH PROTECTION: Prevent explosive forecasts from tiny price decimals
         shadow_risk = decision.get("shadow_risk_floor", price * 0.95)
+        forecast_price = decision['expected_future_price']
+        if forecast_price > (price * 2): # If forecast predicts 100% gain in 8 hours, it's a bug
+            forecast_price = price
+            confidence = min(confidence, 0.50)
 
-        print(f"[{symbol}] Price: {price:.2f} | Conf: {confidence:.3f} | Forecast: {decision['expected_future_price']:.2f}")
+        print(f"[{symbol}] Price: {price:.4f} | Conf: {confidence:.3f} | Forecast: {forecast_price:.4f}")
 
         if not (self.risk.allow_trading(equity) and (daily_loss < config.MAX_DAILY_LOSS_PCT)):
-            print(f"Risk Guard Active for {symbol}. Trading paused.")
+            print(f"Risk Guard Active for {symbol}.")
             return
 
-        # 3. Execution Logic
+        # 3. EXECUTION LOGIC
         if action == "BUY" and position_qty <= 0:
             qty = self.compute_buy_qty(price, buying_power, equity, confidence, 0.015, drawdown)
             if qty > 0:
                 try:
-                    self.broker.submit_order(symbol=symbol, qty=qty, side="buy", type="market", time_in_force="gtc")
+                    self.broker.submit_order(symbol=symbol, qty=qty, side="buy")
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, decision['regime'], threshold, "shadow_entry")
                 except Exception as e:
                     print(f"Order Error: {e}")
@@ -158,17 +180,16 @@ class TradingBot:
         elif position_qty > 0:
             pnl = (price - entry_price) / entry_price if entry_price > 0 else 0
             
-            # Exit Triggers
+            # Exit Conditions
             exit_sl = pnl <= -config.STOP_LOSS_PCT
             exit_tp = pnl >= config.TAKE_PROFIT_PCT
             exit_sig = (action == "SELL")
-            # Predictive Exit: If current price breaks the simulated 'worst-case' floor
-            exit_shadow = price < shadow_risk 
+            exit_shadow = price < shadow_risk # Price fell below the simulated worst-case floor
 
             if exit_sl or exit_tp or exit_sig or exit_shadow:
                 try:
-                    self.broker.submit_order(symbol=symbol, qty=position_qty, side="sell", type="market", time_in_force="gtc")
-                    reason = "stop_loss" if exit_sl else ("take_profit" if exit_tp else ("shadow_floor_break" if exit_shadow else "shadow_exit"))
+                    self.broker.submit_order(symbol=symbol, qty=position_qty, side="sell")
+                    reason = "stop_loss" if exit_sl else ("take_profit" if exit_tp else ("shadow_floor" if exit_shadow else "shadow_exit"))
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, position_qty, equity, drawdown, True, decision['regime'], threshold, reason)
                 except Exception as e:
                     print(f"Exit Error: {e}")
@@ -187,14 +208,12 @@ class TradingBot:
     def run(self):
         print("=== Self-Reliant Trading Bot Started ===")
         
-        # Primary Loop: Iterates through all coins in config
+        # Main Portfolio Loop: Always evaluates all targets
         for s in self.symbols:
             print(f"\n--- Checking {s} ---")
             df = self.fetch_data(s)
             if df is not None:
                 self.evaluate_and_trade(s, df)
-            else:
-                print(f"Warning: No data returned for {s}")
         
         print("\n--- Cycle Complete ---")
         
