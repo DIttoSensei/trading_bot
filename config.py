@@ -22,16 +22,16 @@ MODEL_RETRAIN_HOURS = int(os.getenv("MODEL_RETRAIN_HOURS", "24"))
 BOT_RUN_ONCE = os.getenv("BOT_RUN_ONCE", "false").lower() == "true"
 
 # Risk controls
-MAX_DRAWDOWN = float(os.getenv("MAX_DRAWDOWN", "0.10"))
-STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.02"))
-TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "0.10"))
-MIN_BUY_CONFIDENCE = float(os.getenv("MIN_BUY_CONFIDENCE", "0.49"))
+MAX_DRAWDOWN = 0.15
+STOP_LOSS_PCT = 0.03
+TAKE_PROFIT_PCT = 0.12
+MIN_BUY_CONFIDENCE = 0.48
 MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.04"))
 ENABLE_PROBE_ENTRY = os.getenv("ENABLE_PROBE_ENTRY", "true").lower() == "true"
-PROBE_CONFIDENCE = float(os.getenv("PROBE_CONFIDENCE", "0.48"))
+PROBE_CONFIDENCE = 0.46
 PROBE_TECH_MIN = float(os.getenv("PROBE_TECH_MIN", "0.05"))
 PROBE_ML_MIN = float(os.getenv("PROBE_ML_MIN", "0.51"))
-PROBE_SIZE_MULTIPLIER = float(os.getenv("PROBE_SIZE_MULTIPLIER", "0.35"))
+PROBE_SIZE_MULTIPLIER = 0.40
 ENABLE_ATR_EXITS = os.getenv("ENABLE_ATR_EXITS", "true").lower() == "true"
 ATR_WINDOW = int(os.getenv("ATR_WINDOW", "14"))
 ATR_STOP_MULTIPLIER = float(os.getenv("ATR_STOP_MULTIPLIER", "2.2"))
