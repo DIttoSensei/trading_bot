@@ -24,7 +24,7 @@ BOT_RUN_ONCE = os.getenv("BOT_RUN_ONCE", "false").lower() == "true"
 # Risk controls
 MAX_DRAWDOWN = 0.15
 STOP_LOSS_PCT = 0.03
-TAKE_PROFIT_PCT = 0.12
+TAKE_PROFIT_PCT = 0.05
 MIN_BUY_CONFIDENCE = 0.48
 MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.04"))
 ENABLE_PROBE_ENTRY = os.getenv("ENABLE_PROBE_ENTRY", "true").lower() == "true"
