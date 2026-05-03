@@ -376,20 +376,30 @@ class TradingBot:
             return
 
         while True:
-            try:
-                now = datetime.now(UTC)
-                if now >= self.next_decision_at:
-                    for symbol in self.symbols:
+            now = datetime.now(UTC)
+            if now >= self.next_decision_at:
+                for symbol in self.symbols:
+                    try:
                         df = self.fetch_data(symbol)
                         if df is not None:
                             self.evaluate_and_trade(symbol, df)
-                    self.next_decision_at = now + timedelta(hours=config.DECISION_INTERVAL_HOURS)
-                    print(f"\n  Next decision: {self.next_decision_at.strftime('%Y-%m-%d %H:%M')} UTC")
-                else:
-                    wait_mins = int((self.next_decision_at - now).total_seconds() / 60)
-                    print(f"  Waiting... {wait_mins}m until next decision.")
-            except Exception as exc:
-                print(f"  ❌ Loop error: {exc}")
+                    except Exception as exc:
+                        # One symbol crashing must NEVER block the others
+                        import traceback
+                        print(f"  ❌ Error processing {symbol}: {exc}")
+                        traceback.print_exc()
+                        try:
+                            equity, _, drawdown_val = self.get_account_state()
+                            self._log(symbol, 0.0, "ERROR", 0.0, 0.0, 0.5,
+                                      0.0, equity, drawdown_val, False,
+                                      "error", 0.0, str(exc)[:100])
+                        except Exception:
+                            pass
+                self.next_decision_at = now + timedelta(hours=config.DECISION_INTERVAL_HOURS)
+                print(f"\n  Next decision: {self.next_decision_at.strftime('%Y-%m-%d %H:%M')} UTC")
+            else:
+                wait_mins = int((self.next_decision_at - now).total_seconds() / 60)
+                print(f"  Waiting... {wait_mins}m until next decision.")
 
             time.sleep(max(60, config.DATA_REFRESH_MINUTES * 60))
 
