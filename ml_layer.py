@@ -92,6 +92,8 @@ class MLSpecialist:
         rs = gain / loss.replace(0, np.nan)
         d["rsi"] = (100 - (100 / (1 + rs.fillna(0)))) / 100
 
+        d["return_8h"] = d["close"].pct_change(8)
+
         # Volume Spike
         d["vol_spike"] = d["volume"] / d["volume"].rolling(20).mean().replace(0, np.nan)
         
@@ -109,14 +111,14 @@ class MLSpecialist:
         d = self._engineer_features(df_train)
         
         # Dynamic Labeling: 1.2 Std Dev of 4-hour moves
-        threshold = d["return_4h"].std() * 1.2 
-        future_return = d["close"].shift(-4) / d["close"] - 1
+        threshold = d["return_8h"].std() * 1.2 
+        future_return = d["close"].shift(-8) / d["close"] - 1
         
         y = (future_return > threshold).astype(int)
         
         # Shift features to align with future labels
-        X = d[self.features].values[:-4]
-        y = y.values[:-4]
+        X = d[self.features].values[:-8]
+        y = y.values[:-8]
         
         if len(np.unique(y)) < 2:
             print("⚠️ Market too flat for classification. Using neutral bias.")
