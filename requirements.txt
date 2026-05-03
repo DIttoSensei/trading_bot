@@ -1,8 +1,14 @@
+# Broker & Data
 alpaca-py
 pandas
 numpy
-scikit-learn
 pandas-ta
+
+# Layer 2: ML Specialist
+xgboost
+scikit-learn
+
+# Layer 3: The Judge & Logging
 python-dotenv
 gspread
 google-auth

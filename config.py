@@ -7,7 +7,7 @@ ALPACA_PAPER = True
 
 # Core trading setup
 SYMBOL = os.getenv("TRADE_SYMBOL", "BTC/USD")
-TRADE_SYMBOLS = ["BTC/USD", "SOL/USD", "DOGE/USD", "PEPE/USD"]
+TRADE_SYMBOLS = ["BTC/USD", "SOL/USD", "DOGE/USD"]
 POSITION_FRACTION = float(os.getenv("POSITION_FRACTION", "0.60"))
 MIN_EQUITY_FRACTION = float(os.getenv("MIN_EQUITY_FRACTION", "0.15"))
 MAX_EQUITY_FRACTION = float(os.getenv("MAX_EQUITY_FRACTION", "0.90"))  # never go 100% - keep buffer
@@ -17,7 +17,7 @@ MIN_NOTIONAL_PER_TRADE = float(os.getenv("MIN_NOTIONAL_PER_TRADE", "50"))
 # Timing
 DATA_REFRESH_MINUTES = int(os.getenv("DATA_REFRESH_MINUTES", "15"))
 DECISION_INTERVAL_HOURS = int(os.getenv("DECISION_INTERVAL_HOURS", "1"))
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "1440"))
+LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "26280"))
 MODEL_RETRAIN_HOURS = int(os.getenv("MODEL_RETRAIN_HOURS", "24"))
 BOT_RUN_ONCE = os.getenv("BOT_RUN_ONCE", "false").lower() == "true"
 
@@ -45,7 +45,7 @@ ATR_TP_MULTIPLIER = float(os.getenv("ATR_TP_MULTIPLIER", "5.0"))
 
 # Backtest gate
 ENABLE_BACKTEST_GATE = os.getenv("ENABLE_BACKTEST_GATE", "false").lower() == "true"
-ML_TRAIN_MIN_ROWS = int(os.getenv("ML_TRAIN_MIN_ROWS", "500"))         # lowered from 1300 - was blocking training too long
+ML_TRAIN_MIN_ROWS = int(os.getenv("ML_TRAIN_MIN_ROWS", "5000"))         # lowered from 1300 - was blocking training too long
 BACKTEST_TEST_WINDOW = int(os.getenv("BACKTEST_TEST_WINDOW", "96"))
 BACKTEST_MIN_SIGNALS = int(os.getenv("BACKTEST_MIN_SIGNALS", "6"))
 BACKTEST_MIN_WINRATE = float(os.getenv("BACKTEST_MIN_WINRATE", "0.45"))

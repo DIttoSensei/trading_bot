@@ -1,79 +1,63 @@
 import numpy as np
 import config
 
-
 class LLMJudge:
-    """
-    Layer 3 decision engine with improvements:
-
-    1. Regime-aware Monte Carlo simulation
-       - Weights recent volatility (last 48h) 3x more than historical
-       - Detects if market is in uptrend/downtrend and biases paths accordingly
-       - Pure random walk was giving no real edge
-
-    2. Smarter thresholding
-       - Base threshold raised to 0.54 (was 0.51 - too easy to pass)
-       - Threshold rises in high-volatility regimes (more caution needed)
-       - Threshold drops slightly in confirmed uptrends (trust the trend)
-
-    3. Cleaner signal combination
-       - Explicit regime detection drives weight allocation
-       - Added sell signal strength check (avoids panic exits on weak signals)
-    """
-
     def __init__(self):
         self.base_threshold = config.BASE_THRESHOLD
         self.max_threshold = config.MAX_THRESHOLD
 
     def run_shadow_simulations(self, current_price, df, hours_ahead=8, simulations=1000):
         """
-        Regime-aware Monte Carlo price simulation.
-        Uses recent volatility weighted 3x vs full history.
+        Regime-aware Monte Carlo. Optimized for 3-year data context.
+        Caps the 'historical' memory to 1000 hours so the simulation 
+        stays relevant to the current market epoch.
         """
-        returns = df["close"].pct_change().dropna()
-        if len(returns) < 48:
+        # Calculate log returns for better statistical properties over long periods
+        returns = np.log(df["close"] / df["close"].shift(1)).dropna()
+        
+        if len(returns) < 72:
             return 0.5, current_price, current_price * 0.97
 
-        # Recent regime (last 48h) vs long-term
-        recent_returns = returns.iloc[-48:]
-        long_returns = returns
+        # 3-Year Fix: We use the last 1000h as "Historical" and 72h as "Recent"
+        recent_returns = returns.iloc[-72:]
+        hist_window = returns.iloc[-1000:] 
 
-        mu_recent = recent_returns.mean()
-        sigma_recent = recent_returns.std()
-        mu_long = long_returns.mean()
-        sigma_long = long_returns.std()
+        mu_recent, sigma_recent = recent_returns.mean(), recent_returns.std()
+        mu_hist, sigma_hist = hist_window.mean(), hist_window.std()
 
-        # Blend: 70% recent, 30% historical - weights recent conditions heavier
-        mu = 0.70 * mu_recent + 0.30 * mu_long
-        sigma = 0.70 * sigma_recent + 0.30 * sigma_long
+        # Blend: 80% Recent / 20% Historical (Aggressive for Crypto)
+        mu = 0.80 * mu_recent + 0.20 * mu_hist
+        sigma = 0.80 * sigma_recent + 0.20 * sigma_hist
 
-        # Trend adjustment: if price is above 20h MA, drift slightly positive
-        ma_20 = df["close"].rolling(20).mean().iloc[-1]
-        if current_price > ma_20 * 1.005:
-            mu += sigma * 0.05   # slight upward bias in confirmed uptrend
-        elif current_price < ma_20 * 0.995:
-            mu -= sigma * 0.05   # slight downward bias in downtrend
+        # Trend Bias based on 20h vs 200h (Golden/Death Cross logic)
+        sma_20 = df["close"].rolling(20).mean().iloc[-1]
+        sma_200 = df["close"].rolling(200).mean().iloc[-1]
+        
+        if current_price > sma_20 and sma_20 > sma_200:
+            mu += abs(mu) * 0.1  # Strengthen upward drift in bull alignment
+        elif current_price < sma_20 and sma_20 < sma_200:
+            mu -= abs(mu) * 0.1  # Strengthen downward drift in bear alignment
 
         sigma = max(sigma, 1e-6)
 
-        # Simulate paths
+        # Simulate paths using Geometric Brownian Motion logic
         shocks = np.random.normal(mu, sigma, (simulations, hours_ahead))
         price_paths = current_price * np.exp(np.cumsum(shocks, axis=1))
         final_prices = price_paths[:, -1]
 
         win_prob = float(np.sum(final_prices > current_price) / simulations)
         expected_price = float(np.mean(final_prices))
+        # 95% Confidence floor (Value at Risk)
         worst_case = float(np.percentile(final_prices, 5))
 
         return win_prob, expected_price, worst_case
 
     def detect_regime(self, df):
-        """
-        Returns (volatility, trend_strength, trend_direction, is_trending).
-        trend_direction: +1 uptrend, -1 downtrend, 0 neutral
-        """
         returns = df["close"].pct_change().dropna()
-        volatility = float(returns.std()) if not returns.empty else 0.015
+        # Annualized volatility approx
+        volatility = float(returns.std() * np.sqrt(24 * 365)) 
+        # Using a raw std for the threshold logic
+        raw_vol = float(returns.tail(48).std())
 
         sma_20 = df["close"].rolling(20).mean()
         sma_50 = df["close"].rolling(50).mean()
@@ -83,90 +67,72 @@ class LLMJudge:
         trend_direction = 0
         is_trending = False
 
-        if len(sma_20) >= 20 and len(sma_50) >= 50:
+        if len(df) >= 50:
             s20 = sma_20.iloc[-1]
             s50 = sma_50.iloc[-1]
-            if s50 > 0:
-                trend_strength = float(abs((s20 - s50) / s50))
-                trend_direction = 1 if s20 > s50 else -1
-                is_trending = trend_strength > 0.005  # 0.5% separation = trending
+            trend_strength = float(abs((s20 - s50) / s50))
+            trend_direction = 1 if s20 > s50 else -1
+            is_trending = trend_strength > 0.008 # 0.8% threshold for trending
 
-        return volatility, trend_strength, trend_direction, is_trending
+        return raw_vol, trend_strength, trend_direction, is_trending
 
     def evaluate(self, tech, ml, df):
         current_price = float(df.iloc[-1]["close"])
-        volatility, trend_strength, trend_direction, is_trending = self.detect_regime(df)
+        vol, trend_str, trend_dir, is_trending = self.detect_regime(df)
 
-        # 1. Shadow simulation
-        shadow_win_prob, exp_price, shadow_risk = self.run_shadow_simulations(
-            current_price, df
-        )
+        shadow_win_prob, exp_price, shadow_risk = self.run_shadow_simulations(current_price, df)
 
-        # 2. Combine signals
-        tech_prob = (tech + 1) / 2.0  # convert -1..1 to 0..1
+        # Signal Combination
+        tech_prob = (tech + 1) / 2.0
+        
+        # FINAL CONFIDENCE FORMULA
+        # Logic: Shadow (Monte Carlo) is the anchor, ML is the momentum, Tech is the trigger
+        confidence = (0.40 * shadow_win_prob) + (0.35 * ml) + (0.25 * tech_prob)
 
-        # Weighting: ML gets more trust when it's been trained on enough data
-        # Shadow foresight: 35%, ML: 35%, Technicals: 30%
-        confidence = (0.35 * shadow_win_prob) + (0.35 * ml) + (0.30 * tech_prob)
-
-        # Trend confirmation bonus
-        if is_trending:
-            if (tech > 0.1 and trend_direction > 0) or (tech < -0.1 and trend_direction < 0):
-                confidence *= 1.06  # signals agree with trend
-
-        # Volatility penalty: high vol = uncertainty = reduce confidence
-        if volatility > 0.04:
-            confidence *= 0.80
-        elif volatility > 0.025:
-            confidence *= 0.90
+        if is_trending and trend_dir > 0 and tech > 0:
+            confidence *= 1.05 
+        
+        # Volatility Squelch (If market is erratic, trust signals less)
+        if vol > 0.03:
+            confidence *= 0.85
 
         confidence = float(np.clip(confidence, 0.0, 1.0))
 
-        # 3. Dynamic threshold
+        # Dynamic Thresholding
         dynamic_threshold = self.base_threshold
-
-        # Raise threshold if downside risk is large (shadow shows >3% crash floor gap)
         risk_gap = (current_price - shadow_risk) / current_price
-        if risk_gap > 0.04:
-            dynamic_threshold += 0.06
-        elif risk_gap > 0.03:
-            dynamic_threshold += 0.03
 
-        # Raise threshold in high volatility (more noise, need stronger signal)
-        if volatility > 0.035:
-            dynamic_threshold += 0.04
+        # If shadow says 5% downside is likely, raise the bar significantly
+        if risk_gap > 0.05: dynamic_threshold += 0.08
+        elif risk_gap > 0.03: dynamic_threshold += 0.04
 
-        # Lower threshold slightly in confirmed uptrend with good ML signal
-        if is_trending and trend_direction > 0 and ml > 0.58:
+        # In trending markets, we can be slightly more aggressive
+        if is_trending and trend_dir > 0:
             dynamic_threshold -= 0.02
 
         dynamic_threshold = float(np.clip(dynamic_threshold, self.base_threshold, self.max_threshold))
 
-        # 4. Decision
+        # Decision Matrix
         sell_threshold = 1.0 - dynamic_threshold
-
+        
         if confidence >= dynamic_threshold:
             action = "BUY"
-        elif confidence <= sell_threshold and current_price < shadow_risk:
-            # Only sell on signal AND shadow confirms danger (avoids weak-signal exits)
-            action = "SELL"
-        elif confidence <= (sell_threshold - 0.05):
-            # Very strong sell signal even without shadow confirmation
-            action = "SELL"
+        elif confidence <= sell_threshold:
+            # If Monte Carlo also agrees price will be lower, execute SELL
+            if exp_price < current_price:
+                action = "SELL"
+            else:
+                action = "HOLD" # Divergence between signals and shadow
         else:
             action = "HOLD"
 
-        regime_label = "trending_up" if (is_trending and trend_direction > 0) else \
-                       "trending_down" if (is_trending and trend_direction < 0) else "ranging"
+        regime_label = "bull_trend" if (is_trending and trend_dir > 1) else \
+                       "bear_trend" if (is_trending and trend_dir < 1) else "range"
 
         return {
             "action": action,
             "confidence": confidence,
             "threshold": dynamic_threshold,
             "regime": regime_label,
-            "shadow_win_prob": shadow_win_prob,
-            "expected_future_price": exp_price,
-            "shadow_risk_floor": shadow_risk,
-            "volatility": volatility,
-            "trend_direction": trend_direction,
+            "volatility": vol
         }
