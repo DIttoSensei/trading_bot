@@ -197,6 +197,9 @@ class TradingBot:
         if len(df) < config.ML_TRAIN_MIN_ROWS:
             remaining = config.ML_TRAIN_MIN_ROWS - len(df)
             print(f"{symbol}: Warming up... need {remaining} more hourly bars. HOLD.")
+            # Still log warmup HOLDs so every symbol appears in the journal
+            self._log(symbol, price, "HOLD", 0.0, 0.0, 0.5,
+                      position_qty, equity, drawdown, False, "warmup", 0.0, f"warmup_{remaining}_bars_remaining")
             return
 
         if self.should_retrain(symbol):
@@ -208,6 +211,8 @@ class TradingBot:
 
         if feat_df.empty:
             print(f"{symbol}: Feature engineering produced empty frame. HOLD.")
+            self._log(symbol, price, "HOLD", 0.0, 0.0, 0.5,
+                      position_qty, equity, drawdown, False, "unknown", 0.0, "feature_engineering_empty")
             return
 
         ml_prob = float(self.ml_models[symbol].predict(feat_df.iloc[-1]))
@@ -264,6 +269,8 @@ class TradingBot:
                               qty, equity, drawdown, False, regime, threshold, str(e))
             else:
                 print(f"  ⚠️  Qty computed as 0. Check buying power or MIN_NOTIONAL.")
+                self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob,
+                          0.0, equity, drawdown, False, regime, threshold, "buy_signal_qty_zero")
 
         # ── PROBE ENTRY (small position when signal is promising but not full conviction) ──
         elif (config.ENABLE_PROBE_ENTRY
@@ -290,6 +297,8 @@ class TradingBot:
                               probe_qty, equity, drawdown, True, regime, threshold, "probe_entry")
                 except Exception as e:
                     print(f"  ❌ Probe order failed: {e}")
+                    self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob,
+                              0.0, equity, drawdown, False, regime, threshold, f"probe_failed_{e}")
 
         # ── EXIT LOGIC ────────────────────────────────────────────────────────
         elif position_qty > 0:
