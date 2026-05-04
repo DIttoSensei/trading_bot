@@ -193,7 +193,7 @@ class TradingBot:
                 
                 if action == "SELL" or trailing_triggered:
                     note = "trailing_stop" if trailing_triggered else "shadow_exit"
-                    self.broker.submit_order(symbol, qty, "sell", "market", "gtc")
+                    self.broker.submit_order(symbol, "sell", qty, "market", "gtc")
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, note)
                 else:
                     self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
