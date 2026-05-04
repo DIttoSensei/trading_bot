@@ -191,7 +191,7 @@ class TradingBot:
                 self.trailing_stop.update_peak(symbol, price) # Sync tracker
                 trailing_triggered, _ = self.trailing_stop.should_exit(symbol, price, df)
                 
-                if action == "SELL" or trailing_triggered:
+                if (action == "SELL" or trailing_triggered) and qty > 0:
                     note = "trailing_stop" if trailing_triggered else "shadow_exit"
                     self.broker.submit_order(symbol, "sell", qty, "market", "gtc")
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, note)
