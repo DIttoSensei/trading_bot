@@ -187,22 +187,22 @@ class TradingBot:
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, probe_qty, equity, drawdown, True, regime, threshold, "probe_entry")
 
             # --- EXIT LOGIC ---
-            elif qty > 0:
+            if qty > 0:
                 self.trailing_stop.update_peak(symbol, price) # Sync tracker
                 trailing_triggered, _ = self.trailing_stop.should_exit(symbol, price, df)
                 
-                if (action == "SELL" or trailing_triggered) and qty > 0:
+                if (action == "SELL" or trailing_triggered):
                     note = "trailing_stop" if trailing_triggered else "shadow_exit"
                     self.broker.submit_order(symbol, "sell", qty, "market", "gtc")
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, note)
-                elif (action == "SELL" or trailing_triggered):
-                     print(f"ℹ️ {symbol}: Model signaled SELL, but quantity is 0. Skipping.")
                 else:
-                    # If we don't own it and aren't buying, it's just 'WAITING' or 'MONITORING'
-                    display_action = "HOLD" if qty > 0 else "OUT" 
-                    note = "shadow_holding" if qty > 0 else "waiting_for_entry"
-                    
-                    self._log(symbol, price, display_action, confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, note)
+                    # We own it, but the model says stay in
+                    self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
+
+            # --- SIDELINE LOGIC (When QTY is 0 and we didn't BUY) ---
+            else:
+                # We don't own it, and the bot chose not to buy this cycle
+                self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
 
 if __name__ == "__main__":
     try:
