@@ -198,7 +198,11 @@ class TradingBot:
                 elif (action == "SELL" or trailing_triggered):
                      print(f"ℹ️ {symbol}: Model signaled SELL, but quantity is 0. Skipping.")
                 else:
-                    self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
+                    # If we don't own it and aren't buying, it's just 'WAITING' or 'MONITORING'
+                    display_action = "HOLD" if qty > 0 else "OUT" 
+                    note = "shadow_holding" if qty > 0 else "waiting_for_entry"
+                    
+                    self._log(symbol, price, display_action, confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, note)
 
 if __name__ == "__main__":
     try:
