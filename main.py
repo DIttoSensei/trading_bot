@@ -1,6 +1,7 @@
 import csv
 import os
 import sys
+import time
 import traceback
 from datetime import UTC, datetime, timedelta
 
@@ -131,7 +132,6 @@ class TradingBot:
         buying_power = float(acc.buying_power)
         drawdown = self.risk.update(equity)
         
-        # Track daily loss
         if self.day_start_equity is None: self.day_start_equity = equity
         daily_loss = max(0.0, (self.day_start_equity - equity) / self.day_start_equity)
 
@@ -141,7 +141,6 @@ class TradingBot:
                 print(f"⚠️ {symbol}: Warming up.")
                 continue
 
-            # Retrain and Predict
             model = MLSpecialist()
             model.train_price_model(df)
             feat_df = self.engineer_features(df).dropna()
@@ -150,12 +149,10 @@ class TradingBot:
             ml_prob = float(model.predict(feat_df.iloc[-1]))
             tech_signal = float(technical_bot(df))
             
-            # Judge Decision
             decision = self.judge.evaluate(tech_signal, ml_prob, df)
             action, confidence, threshold, regime = decision["action"], float(decision["confidence"]), float(decision["threshold"]), decision["regime"]
             volatility = float(decision.get("volatility", 0.015))
 
-            # Current State
             pos = self.broker.get_position_info(symbol)
             qty = float(pos.get("qty", 0.0))
             price = float(df.iloc[-1]["close"])
@@ -166,11 +163,10 @@ class TradingBot:
                 self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "risk_guard")
                 continue
 
-            # --- BUY LOGIC ---
             # --- SINGLE UNIFIED DECISION CHAIN ---
             
             # 1. Check for Buy Signal
-            if action == "BUY" and confidence >= threshold and qty <= 0:
+            if action == "BUY" and confidence >= threshold and qty <= 0.0001: # <--- DUST FILTER
                 buy_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
                 if buy_qty > 0:
                     self.broker.submit_order(
@@ -181,16 +177,16 @@ class TradingBot:
                     )
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "bracket_entry")
             
-            # 2. Check for Probe Entry (if enabled)
-            elif (config.ENABLE_PROBE_ENTRY and action == "HOLD" and confidence >= config.PROBE_CONFIDENCE and ml_prob > 0.58 and qty <= 0):
+            # 2. Check for Probe Entry
+            elif (config.ENABLE_PROBE_ENTRY and action == "HOLD" and confidence >= config.PROBE_CONFIDENCE and ml_prob > 0.58 and qty <= 0.0001): # <--- DUST FILTER
                 full_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
                 probe_qty = round(full_qty * config.PROBE_SIZE_MULTIPLIER, 6)
                 if probe_qty > 0:
                     self.broker.submit_order(symbol=symbol, qty=probe_qty, side="buy", type="market", time_in_force="gtc")
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, probe_qty, equity, drawdown, True, regime, threshold, "probe_entry")
 
-            # 3. Check for Exit or Hold (if we already own the coin)
-            elif qty > 0:
+            # 3. Check for Exit or Hold (If we actually own a significant amount)
+            elif qty > 0.0001: # <--- THE "DUST FILTER" FIX
                 self.trailing_stop.update_peak(symbol, price) 
                 trailing_triggered, _ = self.trailing_stop.should_exit(symbol, price, df)
                 
@@ -201,13 +197,17 @@ class TradingBot:
                 else:
                     self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
 
-            # 4. Sideline (If we don't own it and didn't buy/probe it)
+            # 4. Sideline (Everything else)
             else:
                 self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
 
 if __name__ == "__main__":
-    try:
-        TradingBot().run_cycle()
-    except Exception:
-        traceback.print_exc()
-        sys.exit(1)
+    while True: # <--- ENSURES IT KEEPS RUNNING
+        try:
+            bot = TradingBot()
+            bot.run_cycle()
+            print("Cycle complete. Sleeping for 60 seconds...")
+            time.sleep(60) # <--- PREVENTS DOUBLE LOGGING
+        except Exception:
+            traceback.print_exc()
+            time.sleep(10) # Wait a bit before retrying on error
