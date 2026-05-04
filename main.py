@@ -1,7 +1,6 @@
 import csv
 import os
 import sys
-import time
 import traceback
 from datetime import UTC, datetime, timedelta
 
@@ -98,11 +97,9 @@ class TradingBot:
 
     def engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
         d = df.copy()
-        # Your specific feature engineering logic
         d["return_1h"] = d["close"].pct_change(1)
         d["volatility_6h"] = d["return_1h"].rolling(6).std()
         d["ma_20_dist"] = (d["close"] / d["close"].rolling(20).mean()) - 1
-        # (Add other features here as needed)
         if "timestamp" in d.columns:
             d["hour_sin"] = np.sin(2 * np.pi * pd.to_datetime(d["timestamp"]).dt.hour / 24)
         return d
@@ -165,8 +162,8 @@ class TradingBot:
 
             # --- SINGLE UNIFIED DECISION CHAIN ---
             
-            # 1. Check for Buy Signal
-            if action == "BUY" and confidence >= threshold and qty <= 0.0001: # <--- DUST FILTER
+            # 1. Check for Buy Signal (Using Dust Filter)
+            if action == "BUY" and confidence >= threshold and qty <= 0.0001:
                 buy_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
                 if buy_qty > 0:
                     self.broker.submit_order(
@@ -177,16 +174,16 @@ class TradingBot:
                     )
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "bracket_entry")
             
-            # 2. Check for Probe Entry
-            elif (config.ENABLE_PROBE_ENTRY and action == "HOLD" and confidence >= config.PROBE_CONFIDENCE and ml_prob > 0.58 and qty <= 0.0001): # <--- DUST FILTER
+            # 2. Check for Probe Entry (Using Dust Filter)
+            elif (config.ENABLE_PROBE_ENTRY and action == "HOLD" and confidence >= config.PROBE_CONFIDENCE and ml_prob > 0.58 and qty <= 0.0001):
                 full_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
                 probe_qty = round(full_qty * config.PROBE_SIZE_MULTIPLIER, 6)
                 if probe_qty > 0:
                     self.broker.submit_order(symbol=symbol, qty=probe_qty, side="buy", type="market", time_in_force="gtc")
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, probe_qty, equity, drawdown, True, regime, threshold, "probe_entry")
 
-            # 3. Check for Exit or Hold (If we actually own a significant amount)
-            elif qty > 0.0001: # <--- THE "DUST FILTER" FIX
+            # 3. Check for Exit or Hold (Using Dust Filter)
+            elif qty > 0.0001:
                 self.trailing_stop.update_peak(symbol, price) 
                 trailing_triggered, _ = self.trailing_stop.should_exit(symbol, price, df)
                 
@@ -197,17 +194,15 @@ class TradingBot:
                 else:
                     self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
 
-            # 4. Sideline (Everything else)
+            # 4. Sideline (The SOL Fix - anything with qty <= 0.0001 that didn't buy)
             else:
                 self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
 
 if __name__ == "__main__":
-    while True: # <--- ENSURES IT KEEPS RUNNING
-        try:
-            bot = TradingBot()
-            bot.run_cycle()
-            print("Cycle complete. Sleeping for 60 seconds...")
-            time.sleep(60) # <--- PREVENTS DOUBLE LOGGING
-        except Exception:
-            traceback.print_exc()
-            time.sleep(10) # Wait a bit before retrying on error
+    try:
+        bot = TradingBot()
+        bot.run_cycle()
+        print(f"--- [SUCCESS] Cycle finished at {datetime.now(UTC)} ---")
+    except Exception:
+        traceback.print_exc()
+        sys.exit(1)
