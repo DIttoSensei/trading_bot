@@ -167,6 +167,9 @@ class TradingBot:
                 continue
 
             # --- BUY LOGIC ---
+            # --- SINGLE UNIFIED DECISION CHAIN ---
+            
+            # 1. Check for Buy Signal
             if action == "BUY" and confidence >= threshold and qty <= 0:
                 buy_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
                 if buy_qty > 0:
@@ -177,8 +180,8 @@ class TradingBot:
                         stop_loss={"stop_price": round(price * (1 - config.STOP_LOSS_PCT), 2)},
                     )
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "bracket_entry")
-
-            # --- PROBE LOGIC ---
+            
+            # 2. Check for Probe Entry (if enabled)
             elif (config.ENABLE_PROBE_ENTRY and action == "HOLD" and confidence >= config.PROBE_CONFIDENCE and ml_prob > 0.58 and qty <= 0):
                 full_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
                 probe_qty = round(full_qty * config.PROBE_SIZE_MULTIPLIER, 6)
@@ -186,9 +189,9 @@ class TradingBot:
                     self.broker.submit_order(symbol=symbol, qty=probe_qty, side="buy", type="market", time_in_force="gtc")
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, probe_qty, equity, drawdown, True, regime, threshold, "probe_entry")
 
-            # --- EXIT LOGIC ---
-            if qty > 0:
-                self.trailing_stop.update_peak(symbol, price) # Sync tracker
+            # 3. Check for Exit or Hold (if we already own the coin)
+            elif qty > 0:
+                self.trailing_stop.update_peak(symbol, price) 
                 trailing_triggered, _ = self.trailing_stop.should_exit(symbol, price, df)
                 
                 if (action == "SELL" or trailing_triggered):
@@ -196,12 +199,10 @@ class TradingBot:
                     self.broker.submit_order(symbol, "sell", qty, "market", "gtc")
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, note)
                 else:
-                    # We own it, but the model says stay in
                     self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
 
-            # --- SIDELINE LOGIC (When QTY is 0 and we didn't BUY) ---
+            # 4. Sideline (If we don't own it and didn't buy/probe it)
             else:
-                # We don't own it, and the bot chose not to buy this cycle
                 self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
 
 if __name__ == "__main__":
