@@ -1,17 +1,7 @@
 import numpy as np
 import pandas as pd
 
-
 class RiskManager:
-    """
-    Manages drawdown limits and ATR-based trailing stops.
-
-    New: TrailingStopTracker
-    - Tracks peak price since entry for each symbol
-    - Computes ATR-based trailing stop floor
-    - Lets winners run while protecting against large reversals
-    """
-
     def __init__(self, max_drawdown: float = 0.10):
         self.max_drawdown = max_drawdown
         self.peak_equity = None
@@ -27,60 +17,29 @@ class RiskManager:
         self.update(equity)
         return self.current_drawdown < self.max_drawdown
 
-
 class TrailingStopTracker:
-    """
-    ATR-based trailing stop per symbol.
+    def __init__(self, atr_multiplier=None):
+        self.peaks = {}
+        # 1.5% is the threshold to protect gains without being 'too twitchy'
+        self.stop_threshold = 0.015 
 
-    How it works:
-    - On entry, record the entry price and reset peak
-    - Each tick, update the peak price seen since entry
-    - Trailing stop = peak - (ATR * multiplier)
-    - If current price drops below trailing stop → exit signal
-    """
+    def update_peak(self, symbol, current_price):
+        if symbol not in self.peaks or current_price > self.peaks[symbol]:
+            self.peaks[symbol] = current_price
 
-    def __init__(self, atr_multiplier: float = 2.0):
-        self.atr_multiplier = atr_multiplier
-        self.peak_prices: dict[str, float] = {}
-        self.entry_prices: dict[str, float] = {}
-
-    def on_entry(self, symbol: str, entry_price: float):
-        self.peak_prices[symbol] = entry_price
-        self.entry_prices[symbol] = entry_price
-
-    def update_peak(self, symbol: str, current_price: float):
-        if symbol in self.peak_prices:
-            self.peak_prices[symbol] = max(self.peak_prices[symbol], current_price)
-
-    def compute_atr(self, df: pd.DataFrame, window: int = 14) -> float:
-        high = df["high"]
-        low = df["low"]
-        close = df["close"]
-        prev_close = close.shift(1)
-
-        tr = pd.concat([
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ], axis=1).max(axis=1)
-
-        atr = tr.rolling(window).mean().iloc[-1]
-        return float(atr) if pd.notna(atr) else float(close.iloc[-1] * 0.02)
-
-    def should_exit(self, symbol: str, current_price: float, df: pd.DataFrame) -> tuple[bool, float]:
-        """
-        Returns (should_exit, trailing_stop_price).
-        """
-        if symbol not in self.peak_prices:
+    def should_exit(self, symbol, current_price, df=None):
+        peak = self.peaks.get(symbol, 0)
+        if peak == 0: 
             return False, 0.0
+        
+        drop_pct = (peak - current_price) / peak
+        
+        # Priority Check: If price drops 1.5% from peak, we MUST exit.
+        if drop_pct >= self.stop_threshold:
+            return True, drop_pct
+            
+        return False, drop_pct
 
-        self.update_peak(symbol, current_price)
-        atr = self.compute_atr(df)
-        trailing_stop = self.peak_prices[symbol] - (atr * self.atr_multiplier)
-
-        should_exit = current_price < trailing_stop
-        return should_exit, trailing_stop
-
-    def on_exit(self, symbol: str):
-        self.peak_prices.pop(symbol, None)
-        self.entry_prices.pop(symbol, None)
+    def on_exit(self, symbol):
+        # Clear data so the next trade starts with a fresh peak
+        self.peaks.pop(symbol, None)
