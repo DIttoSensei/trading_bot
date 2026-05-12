@@ -23,13 +23,13 @@ BOT_RUN_ONCE = os.getenv("BOT_RUN_ONCE", "false").lower() == "true"
 
 # Risk controls
 MAX_DRAWDOWN = float(os.getenv("MAX_DRAWDOWN", "0.10"))
-STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.020"))       # slightly wider - avoids getting shaken out
+STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.015"))       # slightly wider - avoids getting shaken out
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "0.045"))
 MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.04"))
 
 # Entry thresholds - FIXED: was too tight, almost nothing passed
-MIN_BUY_CONFIDENCE = float(os.getenv("MIN_BUY_CONFIDENCE", "0.54"))   # raised from 0.49 - needs real signal
-BASE_THRESHOLD = float(os.getenv("BASE_THRESHOLD", "0.54"))            # raised from 0.51
+MIN_BUY_CONFIDENCE = float(os.getenv("MIN_BUY_CONFIDENCE", "0.42"))   # raised from 0.49 - needs real signal
+BASE_THRESHOLD = float(os.getenv("BASE_THRESHOLD", "0.42"))            # raised from 0.51
 MAX_THRESHOLD = float(os.getenv("MAX_THRESHOLD", "0.68"))              # raised from 0.65
 
 # Probe entries (small test positions)
