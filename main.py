@@ -160,43 +160,36 @@ class TradingBot:
                 self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "risk_guard")
                 continue
 
-            # --- SINGLE UNIFIED DECISION CHAIN ---
+            # --- THE PRECISION DECISION CHAIN ---
             
-            # 1. Check for Buy Signal (Using Dust Filter)
+            # 1. Entry Logic
             if action == "BUY" and confidence >= threshold and qty <= 0.0001:
                 buy_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
                 if buy_qty > 0:
-                    self.broker.submit_order(
-                        symbol=symbol, qty=buy_qty, side="buy", type="market", time_in_force="gtc",
-                        order_class="bracket",
-                        take_profit={"limit_price": round(price * (1 + config.TAKE_PROFIT_PCT), 2)},
-                        stop_loss={"stop_price": round(price * (1 - config.STOP_LOSS_PCT), 2)},
-                    )
-                    self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "bracket_entry")
+                    self.broker.submit_order(symbol=symbol, qty=buy_qty, side="buy", type="market")
+                    self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "entry")
             
-            # 2. Check for Probe Entry (Using Dust Filter)
-            elif (config.ENABLE_PROBE_ENTRY and action == "HOLD" and confidence >= config.PROBE_CONFIDENCE and ml_prob > 0.58 and qty <= 0.0001):
-                full_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
-                probe_qty = round(full_qty * config.PROBE_SIZE_MULTIPLIER, 6)
-                if probe_qty > 0:
-                    self.broker.submit_order(symbol=symbol, qty=probe_qty, side="buy", type="market", time_in_force="gtc")
-                    self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, probe_qty, equity, drawdown, True, regime, threshold, "probe_entry")
-
-            # 3. Check for Exit or Hold (Using Dust Filter)
+            # 2. Exit Logic (Priority: Price Floor > AI Opinion)
             elif qty > 0.0001:
                 self.trailing_stop.update_peak(symbol, price) 
-                trailing_triggered, _ = self.trailing_stop.should_exit(symbol, price, df)
+                trailing_triggered, drop_amt = self.trailing_stop.should_exit(symbol, price)
+
+                if trailing_triggered:
+                    self.broker.submit_order(symbol, "sell", qty, "market")
+                    self.trailing_stop.on_exit(symbol)
+                    self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, f"PROFIT_LOCK_{round(drop_amt*100, 2)}%")
                 
-                if (action == "SELL" or trailing_triggered):
-                    note = "trailing_stop" if trailing_triggered else "shadow_exit"
-                    self.broker.submit_order(symbol, "sell", qty, "market", "gtc")
-                    self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, note)
+                elif action == "SELL":
+                    self.broker.submit_order(symbol, "sell", qty, "market")
+                    self.trailing_stop.on_exit(symbol)
+                    self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, "judge_exit")
+                
                 else:
                     self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
 
-            # 4. Sideline (The SOL Fix - anything with qty <= 0.0001 that didn't buy)
             else:
                 self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
+
 
 if __name__ == "__main__":
     try:
