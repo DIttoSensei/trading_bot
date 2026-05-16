@@ -5,6 +5,10 @@ on:
     - cron: "0 */4 * * *"
   workflow_dispatch:
 
+# Grant write permissions to the GitHub token so it can push state back to your repo
+permissions:
+  contents: write
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -41,9 +45,12 @@ jobs:
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-          # Stage the memory state file and the local csv journal if they exist
-          git add bot_state.json trade_journal.csv || true
-          # Only commit if changes were actually detected to prevent empty commit errors
+          
+          # Stage tracking changes
+          git add bot_state.json || true
+          git add -f trade_journal.csv || true
+          
+          # Only push if code changes exist to avoid empty commit failures
           if ! git diff --cached --quiet; then
             git commit -m "Sync tracking state and logs [skip ci]"
             git push origin main
