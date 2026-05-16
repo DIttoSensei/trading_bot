@@ -1,6 +1,7 @@
 import csv
 import os
 import sys
+import json
 import traceback
 from datetime import UTC, datetime, timedelta
 
@@ -36,17 +37,43 @@ class TradingBot:
         self.ml_models: dict[str, MLSpecialist] = {}
         self.judge = LLMJudge()
         self.risk = RiskManager(max_drawdown=config.MAX_DRAWDOWN)
-        self.trailing_stop = TrailingStopTracker(atr_multiplier=config.ATR_STOP_MULTIPLIER)
+        self.trailing_stop = TrailingStopTracker()
 
-        self.entry_price: dict[str, float] = {}
+        # Define path for memory persistence layer
+        self.state_path = os.path.join(os.path.dirname(__file__), "bot_state.json")
+        self.load_bot_state()
+
         self.day_start_equity = None
         self.journal_path = os.path.join(os.path.dirname(__file__), config.TRADE_LOG_CSV)
         self._ensure_journal()
-        
+
         self.sheet_logger = GoogleSheetLogger(
             credentials_file=os.path.join(os.path.dirname(__file__), config.GOOGLE_CREDENTIALS_FILE),
             sheet_name=config.GOOGLE_SHEETS_NAME,
         )
+
+    def load_bot_state(self):
+        """Loads trailing stop peaks and trade cooldowns across separate GitHub runs."""
+        if os.path.exists(self.state_path):
+            try:
+                with open(self.state_path, "r") as f:
+                    state = json.load(f)
+                    self.trailing_stop.peaks = state.get("peaks", {})
+                    self.cooldowns = state.get("cooldowns", {})
+            except Exception as e:
+                print(f"⚠️ Failed to parse state file, resetting memory: {e}")
+                self.cooldowns = {}
+        else:
+            self.cooldowns = {}
+
+    def save_bot_state(self):
+        """Saves memory state so the next 4-hour workflow run remembers it."""
+        state = {
+            "peaks": self.trailing_stop.peaks,
+            "cooldowns": self.cooldowns
+        }
+        with open(self.state_path, "w") as f:
+            json.dump(state, f, indent=4)
 
     def _ensure_journal(self):
         if not os.path.exists(self.journal_path):
@@ -108,14 +135,14 @@ class TradingBot:
         baseline_vol = 0.015
         vol_multiplier = np.clip(baseline_vol / max(volatility, 1e-6), 0.5, 1.4)
         confidence_multiplier = np.clip((confidence - config.BASE_THRESHOLD) / 0.10, 0.35, 1.25)
-        
+
         drawdown_multiplier = 1.0
         if drawdown > 0.08: drawdown_multiplier = 0.5
         elif drawdown > 0.05: drawdown_multiplier = 0.75
 
         dynamic_fraction = (config.POSITION_FRACTION * vol_multiplier * confidence_multiplier * drawdown_multiplier)
         dynamic_fraction = float(np.clip(dynamic_fraction, config.MIN_EQUITY_FRACTION, config.MAX_EQUITY_FRACTION))
-        
+
         target_notional = min(equity * dynamic_fraction, config.MAX_NOTIONAL_PER_TRADE)
         target_notional = min(target_notional, buying_power * 0.95)
 
@@ -128,9 +155,11 @@ class TradingBot:
         equity = float(acc.equity)
         buying_power = float(acc.buying_power)
         drawdown = self.risk.update(equity)
-        
+
         if self.day_start_equity is None: self.day_start_equity = equity
         daily_loss = max(0.0, (self.day_start_equity - equity) / self.day_start_equity)
+        
+        now_ts = datetime.now(UTC).timestamp()
 
         for symbol in self.symbols:
             df = self.fetch_data(symbol)
@@ -138,14 +167,22 @@ class TradingBot:
                 print(f"⚠️ {symbol}: Warming up.")
                 continue
 
+            # Cooldown Memory Gate: Sideline asset if exited recently
+            cooldown_until = self.cooldowns.get(symbol, 0)
+            if now_ts < cooldown_until:
+                remaining_mins = int((cooldown_until - now_ts) / 60)
+                self._log(symbol, float(df.iloc[-1]["close"]), "OUT", 0.0, 0.0, 0.0, 0.0, equity, drawdown, False, "cooldown", config.BASE_THRESHOLD, f"cooldown_{remaining_mins}m_left")
+                continue
+
+            # Original training engine preserved intact
             model = MLSpecialist()
             model.train_price_model(df)
             feat_df = self.engineer_features(df).dropna()
             if feat_df.empty: continue
-            
+
             ml_prob = float(model.predict(feat_df.iloc[-1]))
             tech_signal = float(technical_bot(df))
-            
+
             decision = self.judge.evaluate(tech_signal, ml_prob, df)
             action, confidence, threshold, regime = decision["action"], float(decision["confidence"]), float(decision["threshold"]), decision["regime"]
             volatility = float(decision.get("volatility", 0.015))
@@ -153,7 +190,7 @@ class TradingBot:
             pos = self.broker.get_position_info(symbol)
             qty = float(pos.get("qty", 0.0))
             price = float(df.iloc[-1]["close"])
-            
+
             risk_ok = self.risk.allow_trading(equity) and (daily_loss < config.MAX_DAILY_LOSS_PCT)
 
             if not risk_ok:
@@ -161,14 +198,14 @@ class TradingBot:
                 continue
 
             # --- THE PRECISION DECISION CHAIN ---
-            
+
             # 1. Entry Logic
             if action == "BUY" and confidence >= threshold and qty <= 0.0001:
                 buy_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
                 if buy_qty > 0:
                     self.broker.submit_order(symbol=symbol, qty=buy_qty, side="buy", type="market")
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "entry")
-            
+
             # 2. Exit Logic (Priority: Price Floor > AI Opinion)
             elif qty > 0.0001:
                 self.trailing_stop.update_peak(symbol, price) 
@@ -177,18 +214,23 @@ class TradingBot:
                 if trailing_triggered:
                     self.broker.submit_order(symbol, "sell", qty, "market")
                     self.trailing_stop.on_exit(symbol)
+                    self.cooldowns[symbol] = now_ts + (12 * 3600)  # Lock memory for 12 hours
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, f"PROFIT_LOCK_{round(drop_amt*100, 2)}%")
-                
+
                 elif action == "SELL":
                     self.broker.submit_order(symbol, "sell", qty, "market")
                     self.trailing_stop.on_exit(symbol)
+                    self.cooldowns[symbol] = now_ts + (12 * 3600)  # Lock memory for 12 hours
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, "judge_exit")
-                
+
                 else:
                     self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
 
             else:
                 self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
+
+        # Persist memory right before the container shuts down
+        self.save_bot_state()
 
 
 if __name__ == "__main__":
