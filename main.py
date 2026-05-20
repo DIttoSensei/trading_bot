@@ -197,7 +197,7 @@ class TradingBot:
                 self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "risk_guard")
                 continue
 
-            # Calculate actual dollar value of position to dynamically bypass exchange dust
+           # Calculate actual dollar value of position to dynamically bypass exchange dust
             position_value = qty * price
             has_real_position = position_value > 1.00
 
@@ -211,7 +211,7 @@ class TradingBot:
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "entry")
 
             # 2. Exit Logic: Manage open positions using the saved trailing peaks
-            elif has_real_position:
+            elif has_real_position and qty > 0:
                 self.trailing_stop.update_peak(symbol, price) 
                 trailing_triggered, drop_amt = self.trailing_stop.should_exit(symbol, price)
 
@@ -230,7 +230,7 @@ class TradingBot:
                 else:
                     self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
 
-            # 3. Flat Cache: No open position and no strong buy signal
+            # 3. Flat Cache: No open position and no strong buy signal (or it's just exchange dust)
             else:
                 self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
 
