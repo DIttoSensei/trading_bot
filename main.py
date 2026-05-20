@@ -158,7 +158,7 @@ class TradingBot:
 
         if self.day_start_equity is None: self.day_start_equity = equity
         daily_loss = max(0.0, (self.day_start_equity - equity) / self.day_start_equity)
-        
+
         now_ts = datetime.now(UTC).timestamp()
 
         for symbol in self.symbols:
@@ -197,17 +197,21 @@ class TradingBot:
                 self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "risk_guard")
                 continue
 
+            # Calculate actual dollar value of position to dynamically bypass exchange dust
+            position_value = qty * price
+            has_real_position = position_value > 1.00
+
             # --- THE PRECISION DECISION CHAIN ---
 
-            # 1. Entry Logic
-            if action == "BUY" and confidence >= threshold and qty <= 0.0001:
+            # 1. Entry Logic: Only try to execute a buy if we aren't holding a real position
+            if action == "BUY" and confidence >= threshold and not has_real_position:
                 buy_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
                 if buy_qty > 0:
                     self.broker.submit_order(symbol=symbol, qty=buy_qty, side="buy", type="market")
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "entry")
 
-            # 2. Exit Logic (Priority: Price Floor > AI Opinion)
-            elif qty > 0.0001:
+            # 2. Exit Logic: Manage open positions using the saved trailing peaks
+            elif has_real_position:
                 self.trailing_stop.update_peak(symbol, price) 
                 trailing_triggered, drop_amt = self.trailing_stop.should_exit(symbol, price)
 
@@ -226,6 +230,7 @@ class TradingBot:
                 else:
                     self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
 
+            # 3. Flat Cache: No open position and no strong buy signal
             else:
                 self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
 
