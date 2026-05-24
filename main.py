@@ -161,6 +161,13 @@ class TradingBot:
 
         now_ts = datetime.now(UTC).timestamp()
 
+        # --- STRUCTURAL RISK CONTROLS ---
+        # 1. Total Portfolio Allocation Limit (Absolute Cap: 25% of total equity)
+        MAX_PORTFOLIO_EXPOSURE = equity * 0.25 
+        
+        # 2. Bear Market Allocation Limit (Strict Cap: 10% of total equity)
+        MAX_BEAR_EXPOSURE = equity * 0.10
+
         for symbol in self.symbols:
             df = self.fetch_data(symbol)
             if df is None or len(df) < config.ML_TRAIN_MIN_ROWS:
@@ -205,7 +212,25 @@ class TradingBot:
 
             # 1. Entry Logic: Only try to execute a buy if we aren't holding a real position
             if action == "BUY" and confidence >= threshold and not has_real_position:
+                
+                # Fetch fresh account state to see current total exposure before buying
+                current_positions = self.broker.get_all_positions()
+                total_deployed_capital = sum(float(p.get("qty", 0.0)) * float(p.get("current_price", 0.0)) for p in current_positions)
+
+                # Check exposure limits based on market conditions
+                if regime == "bear_trend" and total_deployed_capital >= MAX_BEAR_EXPOSURE:
+                    self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "skip_bear_exposure_limit")
+                    continue
+                elif total_deployed_capital >= MAX_PORTFOLIO_EXPOSURE:
+                    self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "skip_max_portfolio_limit")
+                    continue
+
                 buy_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
+                
+                # Dynamic allocation scaling: Cut buy sizes by 60% if inside a bear market
+                if regime == "bear_trend":
+                    buy_qty = round(buy_qty * 0.40, 6)
+
                 if buy_qty > 0:
                     self.broker.submit_order(symbol=symbol, qty=buy_qty, side="buy", type="market")
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "entry")
