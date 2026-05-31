@@ -11,6 +11,17 @@ class Broker:
     def get_account(self):
         return self.client.get_account()
 
+    def get_all_positions(self):
+        """
+        Fetches all currently open positions from Alpaca.
+        Required by main.py to track total portfolio exposure.
+        """
+        try:
+            return self.client.get_all_positions()
+        except Exception as e:
+            print(f"⚠️ Failed to fetch all positions: {e}")
+            return []
+
     def submit_order(self, symbol, side, qty, type="market", time_in_force="gtc"):
         """
         Submits a market order to Alpaca.
