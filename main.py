@@ -215,7 +215,7 @@ class TradingBot:
 
                 # Fetch fresh account state to see current total exposure before buying
                 current_positions = self.broker.get_all_positions()
-                
+
                 # FIXED: Dot notation usage for native Alpaca Position objects
                 total_deployed_capital = sum(float(p.qty) * float(p.current_price) for p in current_positions)
 
@@ -237,8 +237,19 @@ class TradingBot:
                     self.broker.submit_order(symbol=symbol, qty=buy_qty, side="buy", type="market")
                     self._log(symbol, price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "entry")
 
-            # 2. Exit Logic: Manage open positions using the saved trailing peaks (Guards against dust quantities)
+            # 2. Exit Logic: Manage open positions using the saved trailing peaks
             elif has_real_position and qty > 0.0001:
+                avg_entry = float(pos.get("avg_entry_price", price))
+
+                # --- NEW HYBRID SWITCH: SCALPER MODE PROFIT TARGET ---
+                if regime == "range" and price >= avg_entry * 1.0075:
+                    self.broker.submit_order(symbol, "sell", qty, "market")
+                    self.trailing_stop.on_exit(symbol)
+                    self.cooldowns[symbol] = now_ts + (4 * 3600)  # Shorter 4h range cooldown
+                    self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, "RANGE_SCALP_TAKE_PROFIT_0.75%")
+                    continue
+
+                # --- TREND MODE FALLBACK: TRAILING STOP ---
                 self.trailing_stop.update_peak(symbol, price) 
                 trailing_triggered, drop_amt = self.trailing_stop.should_exit(symbol, price)
 
