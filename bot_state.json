@@ -1,5 +1,7 @@
 {
-    "peaks": {},
+    "peaks": {
+        "SOL/USD": 82.678
+    },
     "cooldowns": {
         "SOL/USD": 1779638050.184563,
         "DOGE/USD": 1779638050.184563
