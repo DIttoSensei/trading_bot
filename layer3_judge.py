@@ -126,8 +126,8 @@ class LLMJudge:
         else:
             action = "HOLD"
 
-        regime_label = "bull_trend" if (is_trending and trend_dir > 1) else \
-                       "bear_trend" if (is_trending and trend_dir < 1) else "range"
+        regime_label = "bull_trend" if (is_trending and trend_dir > 0) else \
+                       "bear_trend" if (is_trending and trend_dir < 0) else "range"
 
         return {
             "action": action,
