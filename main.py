@@ -255,4 +255,21 @@ class TradingBot:
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, "judge_exit")
 
                 else:
-                    self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "
+                    self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
+
+            # 3. Flat Cache: No open position and no strong buy signal (or it's just exchange dust)
+            else:
+                self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
+
+        # Persist memory right before the container shuts down
+        self.save_bot_state()
+
+
+if __name__ == "__main__":
+    try:
+        bot = TradingBot()
+        bot.run_cycle()
+        print(f"--- [SUCCESS] Cycle finished at {datetime.now(UTC)} ---")
+    except Exception:
+        traceback.print_exc()
+        sys.exit(1)
