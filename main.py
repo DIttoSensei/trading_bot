@@ -194,11 +194,6 @@ class TradingBot:
             action, confidence, threshold, regime = decision["action"], float(decision["confidence"]), float(decision["threshold"]), decision["regime"]
             volatility = float(decision.get("volatility", 0.015))
 
-            # --- DYNAMIC THRESHOLD ADAPTATION ---
-            # Lower execution boundary during flat/consolidation phases to unlock localized opportunities
-            if regime == "range":
-                threshold = 0.35
-
             pos = self.broker.get_position_info(symbol)
             qty = float(pos.get("qty", 0.0))
             price = float(df.iloc[-1]["close"])
@@ -220,7 +215,9 @@ class TradingBot:
 
                 # Fetch fresh account state to see current total exposure before buying
                 current_positions = self.broker.get_all_positions()
-                total_deployed_capital = sum(float(p.get("qty", 0.0)) * float(p.get("current_price", 0.0)) for p in current_positions)
+                
+                # FIXED: Dot notation usage for native Alpaca Position objects
+                total_deployed_capital = sum(float(p.qty) * float(p.current_price) for p in current_positions)
 
                 # Check exposure limits based on market conditions
                 if regime == "bear_trend" and total_deployed_capital >= MAX_BEAR_EXPOSURE:
@@ -258,21 +255,4 @@ class TradingBot:
                     self._log(symbol, price, "SELL", confidence, tech_signal, ml_prob, qty, equity, drawdown, True, regime, threshold, "judge_exit")
 
                 else:
-                    self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "shadow_holding")
-
-            # 3. Flat Cache: No open position and no strong buy signal (or it's just exchange dust)
-            else:
-                self._log(symbol, price, "OUT", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
-
-        # Persist memory right before the container shuts down
-        self.save_bot_state()
-
-
-if __name__ == "__main__":
-    try:
-        bot = TradingBot()
-        bot.run_cycle()
-        print(f"--- [SUCCESS] Cycle finished at {datetime.now(UTC)} ---")
-    except Exception:
-        traceback.print_exc()
-        sys.exit(1)
+                    self._log(symbol, price, "HOLD", confidence, tech_signal, ml_prob, qty, equity, drawdown, False, regime, threshold, "
