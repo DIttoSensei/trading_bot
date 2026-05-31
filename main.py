@@ -164,7 +164,7 @@ class TradingBot:
         # --- STRUCTURAL RISK CONTROLS ---
         # 1. Total Portfolio Allocation Limit (Absolute Cap: 25% of total equity)
         MAX_PORTFOLIO_EXPOSURE = equity * 0.25 
-        
+
         # 2. Bear Market Allocation Limit (Strict Cap: 10% of total equity)
         MAX_BEAR_EXPOSURE = equity * 0.10
 
@@ -194,6 +194,11 @@ class TradingBot:
             action, confidence, threshold, regime = decision["action"], float(decision["confidence"]), float(decision["threshold"]), decision["regime"]
             volatility = float(decision.get("volatility", 0.015))
 
+            # --- DYNAMIC THRESHOLD ADAPTATION ---
+            # Lower execution boundary during flat/consolidation phases to unlock localized opportunities
+            if regime == "range":
+                threshold = 0.35
+
             pos = self.broker.get_position_info(symbol)
             qty = float(pos.get("qty", 0.0))
             price = float(df.iloc[-1]["close"])
@@ -212,7 +217,7 @@ class TradingBot:
 
             # 1. Entry Logic: Only try to execute a buy if we aren't holding a real position
             if action == "BUY" and confidence >= threshold and not has_real_position:
-                
+
                 # Fetch fresh account state to see current total exposure before buying
                 current_positions = self.broker.get_all_positions()
                 total_deployed_capital = sum(float(p.get("qty", 0.0)) * float(p.get("current_price", 0.0)) for p in current_positions)
@@ -226,7 +231,7 @@ class TradingBot:
                     continue
 
                 buy_qty = self.compute_buy_qty(price, buying_power, equity, confidence, volatility, drawdown)
-                
+
                 # Dynamic allocation scaling: Cut buy sizes by 60% if inside a bear market
                 if regime == "bear_trend":
                     buy_qty = round(buy_qty * 0.40, 6)
