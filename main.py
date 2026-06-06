@@ -25,7 +25,7 @@ class TradingBot:
         
         # State file for remembering positions across runs
         self.state_file = os.path.join(os.path.dirname(__file__), "bot_state.json")
-        self.positions = {}  # {symbol: {'entry_price': float, 'entry_time': str, 'qty': float}}
+        self.positions = {}
         
         # Load previous state
         self._load_state()
@@ -38,6 +38,12 @@ class TradingBot:
         print(f"📊 Active positions from last run: {len(self.positions)}")
         for sym, pos in self.positions.items():
             print(f"   └─ {sym}: {pos['qty']} @ ${pos['entry_price']:.2f}")
+    
+    def _convert_symbol(self, symbol: str) -> str:
+        """Convert USD to USDT for Alpaca crypto"""
+        if symbol.endswith("/USD"):
+            return symbol.replace("/USD", "/USDT")
+        return symbol
     
     def _load_state(self):
         """Load positions from previous runs"""
@@ -81,9 +87,9 @@ class TradingBot:
         """Fetch historical data"""
         try:
             end = datetime.now(UTC)
-            start = end - timedelta(hours=168)  # 7 days
+            start = end - timedelta(hours=168)
             
-            clean_symbol = symbol.replace('/USD', '')
+            clean_symbol = self._convert_symbol(symbol)
             
             request = CryptoBarsRequest(
                 symbol_or_symbols=[clean_symbol],
@@ -94,6 +100,7 @@ class TradingBot:
             
             bars = self.data_client.get_crypto_bars(request).df
             if bars.empty:
+                print(f"⚠️ No data for {clean_symbol}")
                 return None
             
             bars = bars.reset_index()
@@ -105,7 +112,7 @@ class TradingBot:
             return None
     
     def run_cycle(self):
-        """Main trading cycle - REMEMBERS positions between runs"""
+        """Main trading cycle"""
         print(f"\n{'='*60}")
         print(f"🔄 Trading Cycle at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
         print(f"{'='*60}")
@@ -114,13 +121,12 @@ class TradingBot:
         try:
             account = self.broker.get_account()
             equity = float(account.equity)
+            print(f"💰 Account Equity: ${equity:,.2f}")
         except Exception as e:
             print(f"❌ Cannot get account: {e}")
             return
         
-        print(f"💰 Account Equity: ${equity:,.2f}")
-        
-        # FIRST: Check existing positions (from previous runs)
+        # Check existing positions
         print(f"\n📊 Checking {len(self.positions)} existing positions...")
         for symbol in list(self.positions.keys()):
             position = self.positions[symbol]
@@ -141,51 +147,36 @@ class TradingBot:
             
             print(f"   └─ {symbol}: Held {hold_hours:.1f}h | P&L: {pnl_pct:.2%} (${pnl_usd:+.2f})")
             
-            # EXIT CONDITIONS:
+            # Exit conditions
             exit_signal = False
             exit_reason = ""
             
-            # 1. Take profit at 2-3% (scalp success)
             if pnl_pct >= 0.025:  # 2.5% profit
                 exit_signal = True
                 exit_reason = f"take_profit_{pnl_pct:.2%}"
-            
-            # 2. Stop loss at 2%
             elif pnl_pct <= -0.02:  # 2% loss
                 exit_signal = True
                 exit_reason = f"stop_loss_{pnl_pct:.2%}"
-            
-            # 3. Max hold time (48 hours)
-            elif hold_hours >= 48:
+            elif hold_hours >= 48:  # 48 hour max
                 exit_signal = True
                 exit_reason = f"max_hold_{hold_hours:.0f}h"
             
-            # 4. New signal says sell
-            else:
-                # Get fresh signal
-                signal = self.strategy.analyze(df, has_position=True, symbol=symbol)
-                if signal and signal.get('action') == 'SELL':
-                    exit_signal = True
-                    exit_reason = signal.get('reason', 'signal_exit')
-            
             if exit_signal:
                 try:
-                    # SELL the position
                     self.broker.submit_order(symbol, qty=qty, side='sell')
                     self._log_trade(symbol, 'SELL', current_price, qty, pnl_usd, exit_reason)
-                    del self.positions[symbol]  # Remove from memory
+                    del self.positions[symbol]
                     print(f"   ✅ EXITED {symbol}: {exit_reason}")
                 except Exception as e:
                     print(f"   ❌ Exit failed: {e}")
             else:
                 print(f"   💎 HOLDING {symbol}: Target 2.5% profit, currently {pnl_pct:.2%}")
         
-        # SECOND: Look for NEW entries (only if we have < 3 positions)
-        if len(self.positions) < 3:  # Max 3 concurrent positions
+        # Look for new entries
+        if len(self.positions) < 3:
             print(f"\n🔍 Looking for new entries (current positions: {len(self.positions)}/3)...")
             
             for symbol in self.symbols:
-                # Skip if we already have this symbol
                 if symbol in self.positions:
                     continue
                 
@@ -194,16 +185,13 @@ class TradingBot:
                     continue
                 
                 current_price = float(df.iloc[-1]['close'])
-                
-                # Get trading signal
                 signal = self.strategy.analyze(df, has_position=False, symbol=symbol)
                 
                 if signal and signal.get('action') == 'BUY':
                     confidence = signal.get('confidence', 0)
                     
                     if confidence >= config.MIN_CONFIDENCE_THRESHOLD:
-                        # Calculate position size (5-10% of equity per trade)
-                        position_size_pct = 0.075  # 7.5% per trade
+                        position_size_pct = 0.075
                         qty = (equity * position_size_pct) / current_price
                         qty = round(qty, 6)
                         
@@ -211,7 +199,6 @@ class TradingBot:
                             try:
                                 self.broker.submit_order(symbol, qty=qty, side='buy')
                                 
-                                # Remember this position for next run
                                 self.positions[symbol] = {
                                     'entry_price': current_price,
                                     'entry_time': datetime.now(UTC).isoformat(),
@@ -224,14 +211,11 @@ class TradingBot:
                             except Exception as e:
                                 print(f"   ❌ Entry failed: {e}")
         
-        # Save state for next run
         self._save_state()
         
-        # Summary
         print(f"\n{'='*60}")
         print(f"✅ Cycle Complete")
         print(f"📊 Active positions: {len(self.positions)}")
-        print(f"💾 State saved for next run in 4 hours")
         print(f"{'='*60}\n")
 
 if __name__ == "__main__":
