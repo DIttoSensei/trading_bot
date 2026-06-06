@@ -52,5 +52,5 @@ MAX_HOLD_HOURS = 168                   # 1-week absolute structural macro hold l
 # PERSISTENCE & OUTPUT LOGGING
 # ============================================
 TRADE_LOG_CSV = "trade_log.csv"
-GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
+GOOGLE_CREDENTIALS_FILE = "credentials.json"
 GOOGLE_SHEETS_NAME = "TradingBot"
