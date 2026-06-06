@@ -15,7 +15,7 @@ from alpaca.data.timeframe import TimeFrame
 import config
 from broker import Broker
 from strategy import TradingStrategy
-from risk_manager import RiskManager, PositionTracker
+from risk import RiskManager, PositionTracker
 
 class TradingBot:
     def __init__(self):
