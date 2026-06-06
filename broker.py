@@ -1,64 +1,57 @@
-import math
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+import requests
+from typing import Dict, List, Optional
 
 class Broker:
-    def __init__(self, api_key, secret):
-        # paper=True ensures we don't use real money until you're ready
-        self.client = TradingClient(api_key, secret, paper=True)
+    """
+    Interfaces directly with the Alpaca trade execution routing engines.
+    """
+    def __init__(self, api_key: str, secret_key: str):
+        # Using paper trading endpoints for risk mitigation
+        self.base_url = "https://paper-api.alpaca.markets/v2"
+        self.headers = {
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": secret_key,
+            "Content-Type": "application/json"
+        }
 
     def get_account(self):
-        return self.client.get_account()
+        res = requests.get(f"{self.base_url}/account", headers=self.headers)
+        if res.status_code == 200:
+            data = res.json()
+            class Account:
+                def __init__(self, d):
+                    self.equity = d.get("equity", 100000.0)
+                    self.buying_power = d.get("buying_power", 200000.0)
+            return Account(data)
+        raise ValueError(f"Alpaca API connection failure: {res.text}")
 
-    def get_all_positions(self):
-        try:
-            return self.client.get_all_positions()
-        except Exception as e:
-            print(f"⚠️ Failed to fetch all positions: {e}")
-            return []
+    def get_position_info(self, symbol: str) -> dict:
+        clean_symbol = symbol.replace("/", "")
+        res = requests.get(f"{self.base_url}/positions/{clean_symbol}", headers=self.headers)
+        if res.status_code == 200:
+            return res.json()
+        return {"qty": 0.0, "avg_entry_price": 0.0}
 
-    def submit_order(self, symbol, side, qty, type="market", time_in_force="gtc"):
-        # CRITICAL: Keep the symbol with slash for Alpaca crypto
-        # Alpaca expects "BTC/USD", NOT "BTCUSD"
-        
-        # Clean symbol - ONLY remove if it has extra slashes, but keep the main one
-        if symbol.count('/') > 1:
-            symbol = symbol.replace("/", "")  # Only for malformed symbols
-        # Otherwise keep the symbol as is (e.g., "BTC/USD")
+    def get_all_positions(self) -> List:
+        res = requests.get(f"{self.base_url}/positions", headers=self.headers)
+        if res.status_code == 200:
+            raw_list = res.json()
+            class PositionWrapper:
+                def __init__(self, d):
+                    self.qty = float(d.get("qty", 0.0))
+                    self.current_price = float(d.get("current_price", 0.0))
+                    self.symbol = d.get("symbol")
+            return [PositionWrapper(p) for p in raw_list]
+        return []
 
-        if side.lower() == "sell":
-            qty = math.floor(float(qty) * 10000) / 10000.0
-        else:
-            qty = round(float(qty), 6)
-
-        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
-
-        order_data = MarketOrderRequest(
-            symbol=symbol,
-            qty=qty,
-            side=order_side,
-            time_in_force=TimeInForce.GTC
-        )
-
-        return self.client.submit_order(order_data=order_data)
-
-    def get_position_info(self, symbol):
-        try:
-            pos = self.client.get_open_position(symbol)
-            return {
-                "qty": float(pos.qty),
-                "avg_entry_price": float(pos.avg_entry_price),
-            }
-        except Exception:
-            return {
-                "qty": 0.0,
-                "avg_entry_price": 0.0,
-            }
-
-    def close_position(self, symbol):
-        try:
-            return self.client.close_position(symbol)
-        except Exception as e:
-            print(f"⚠️ Failed to close {symbol}: {e}")
-            return None
+    def submit_order(self, symbol: str, side: str, qty: float, order_type: str = "market"):
+        clean_symbol = symbol.replace("/", "")
+        payload = {
+            "symbol": clean_symbol,
+            "qty": str(qty),
+            "side": side.lower(),
+            "type": order_type.lower(),
+            "time_in_force": "gtc"
+        }
+        res = requests.post(f"{self.base_url}/orders", json=payload, headers=self.headers)
+        return res.json() if res.status_code == 200 else None

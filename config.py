@@ -4,61 +4,45 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ============================================
-# API KEYS
+# API KEYS & CREDENTIALS
 # ============================================
 APCA_API_KEY_ID = os.getenv("APCA_API_KEY_ID")
 APCA_API_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
 
-# Alias for compatibility
 ALPACA_API_KEY = APCA_API_KEY_ID
 ALPACA_SECRET_KEY = APCA_API_SECRET_KEY
 
 # ============================================
-# TRADING CONFIGURATION
+# ASSET MATRIX
 # ============================================
 TRADE_SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD"]
-LOOKBACK_HOURS = 168  # 7 days
-ML_TRAIN_MIN_ROWS = 200
+LOOKBACK_HOURS = 168  # 7 days of historical context
+ML_TRAIN_MIN_ROWS = 100
 
 # ============================================
-# RISK MANAGEMENT
+# CAPITAL EXPOSURE & RISK LIMITS
 # ============================================
-MAX_POSITION_SIZE_PCT = 0.15  # Max 15% per trade
-MAX_TOTAL_EXPOSURE_PCT = 0.40  # Max 40% total deployed
-MAX_DAILY_LOSS_PCT = 0.05  # Stop at 5% daily loss
-MAX_DRAWDOWN = 0.15  # Max 15% drawdown
+MAX_POSITION_SIZE_PCT = 0.20    # Commit up to 20% of equity per sniper trade
+MAX_TOTAL_EXPOSURE_PCT = 0.60   # Max aggregate deployment across all pairs
+MAX_DAILY_LOSS_PCT = 0.04       # Circuit breaker triggers at 4% daily degradation
+MAX_DRAWDOWN = 0.12             # Lifetime structural account stop at 12%
 
 # ============================================
-# TRADE FILTERS
+# SIGNAL DEPLOYMENT PARAMETERS
 # ============================================
-MIN_CONFIDENCE_THRESHOLD = 0.55  # Lowered for more trades
-MIN_PROFIT_TARGET_PCT = 0.015  # 1.5% minimum profit
-MAX_SPREAD_PCT = 0.002
+BASE_THRESHOLD = 0.58           # Range trading baseline execution floor
+MAX_THRESHOLD = 0.72            # Macro bear market safety hurdle rate
+MIN_PROFIT_TARGET_PCT = 0.012   # Range scalp profit threshold (1.2%)
 
 # ============================================
-# EXIT STRATEGY
+# EXIT & TRAILING PARAMETERS
 # ============================================
-TRAILING_STOP_ACTIVATION_PCT = 0.02  # Start trailing after 2% profit
-TRAILING_STOP_DISTANCE_PCT = 0.01  # Trail by 1%
-MAX_HOLD_HOURS = 48  # Force exit after 48 hours
+TRAILING_STOP_ACTIVATION_PCT = 0.015  # Trailing engine wakes up at 1.5% profit
+TRAILING_STOP_DISTANCE_PCT = 0.008    # Trails the asset high from a 0.8% distance
+MAX_HOLD_HOURS = 168                   # 1-week absolute structural macro hold limit
 
 # ============================================
-# THRESHOLDS
-# ============================================
-BASE_THRESHOLD = 0.55
-MAX_THRESHOLD = 0.80
-
-# ============================================
-# POSITION SIZING
-# ============================================
-POSITION_FRACTION = 0.15
-MIN_EQUITY_FRACTION = 0.05
-MAX_EQUITY_FRACTION = 0.25
-MAX_NOTIONAL_PER_TRADE = 5000
-MIN_NOTIONAL_PER_TRADE = 10
-
-# ============================================
-# LOGGING
+# PERSISTENCE & OUTPUT LOGGING
 # ============================================
 TRADE_LOG_CSV = "trade_log.csv"
 GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
