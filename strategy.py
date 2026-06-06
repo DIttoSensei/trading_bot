@@ -1,24 +1,16 @@
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
-from typing import Dict, Optional, Tuple
-from datetime import datetime, UTC
+from typing import Dict, Optional
 
 class TradingStrategy:
-    """
-    Unified trading strategy focused on:
-    1. Trend following (not mean reversion)
-    2. High probability setups
-    3. Realistic profit targets
-    """
+    """Unified trading strategy focused on trend following"""
     
     def __init__(self):
-        self.last_signal = {}
+        self.entry_prices = {}  # Track entry prices per symbol
     
-    def analyze(self, df: pd.DataFrame, has_position: bool) -> Optional[Dict]:
-        """
-        Main analysis function - returns actionable signal
-        """
+    def analyze(self, df: pd.DataFrame, has_position: bool, symbol: str) -> Optional[Dict]:
+        """Main analysis function - returns actionable signal"""
         if len(df) < 100:
             return None
         
@@ -32,27 +24,19 @@ class TradingStrategy:
         
         # Calculate signal based on regime
         if regime == 'TRENDING_UP':
-            signal = self._trend_following_signal(df, indicators, has_position)
+            signal = self._trend_following_signal(df, indicators, has_position, symbol)
         elif regime == 'TRENDING_DOWN':
             signal = self._avoid_down_trend(has_position)
-        else:  # RANGE or UNKNOWN
-            signal = self._range_market_signal(indicators, has_position)
+        else:
+            signal = self._range_market_signal(indicators, has_position, symbol)
         
         if signal:
             signal['regime'] = regime
-            signal['timestamp'] = datetime.now(UTC)
-            
-            # Calculate expected return (realistic)
-            if signal['action'] == 'BUY':
-                signal['expected_return'] = self._calculate_expected_return(df, indicators)
-            elif signal['action'] == 'SELL' and has_position:
-                signal['expected_return'] = indicators.get('current_return', 0)
-            
             return signal
         
         return None
     
-    def _calculate_indicators(self, df: pd.DataFrame) -> Dict:
+    def _calculate_indicators(self, df: pd.DataFrame) -> Optional[Dict]:
         """Calculate all technical indicators"""
         try:
             close = df['close'].values
@@ -111,17 +95,14 @@ class TradingStrategy:
         is_trending = indicators['adx'] > 25
         
         if is_trending and price_above_50 and price_above_200 and ema_50_above_200:
-            # Strong uptrend
             return 'TRENDING_UP'
         elif is_trending and not price_above_50 and not price_above_200:
-            # Strong downtrend
             return 'TRENDING_DOWN'
         else:
-            # Ranging or weak trend
             return 'RANGE'
     
-    def _trend_following_signal(self, df: pd.DataFrame, indicators: Dict, has_position: bool) -> Optional[Dict]:
-        """Generate signal for trending markets - FOLLOW THE TREND"""
+    def _trend_following_signal(self, df: pd.DataFrame, indicators: Dict, has_position: bool, symbol: str) -> Optional[Dict]:
+        """Generate signal for trending markets"""
         confidence = 0.5
         
         # Buy signals (only if no position)
@@ -146,25 +127,20 @@ class TradingStrategy:
                 return {
                     'action': 'BUY',
                     'confidence': confidence,
-                    'take_profit': indicators['close'] * 1.03,  # 3% target
-                    'stop_loss': indicators['close'] * 0.98,    # 2% stop
                 }
         
         # Sell signals (for existing positions)
-        else:
-            # Trail stop based on ATR
-            atr_distance = indicators['atr'] * 2
+        elif has_position:
+            # Get entry price
+            entry_price = self.entry_prices.get(symbol, indicators['close'])
+            current_return = (indicators['close'] - entry_price) / entry_price
             
-            # Take profit at 3-5%
-            current_return = (indicators['close'] - self._get_entry_price(df)) / self._get_entry_price(df)
-            
+            # Take profit at 3% gain
             if current_return > 0.03:
-                # Take profit at 3% gain
                 return {
                     'action': 'SELL',
                     'confidence': 0.80,
-                    'expected_return': current_return,
-                    'trailing_stop': True
+                    'reason': f'take_profit_{current_return:.2%}'
                 }
             
             # Stop loss at 2%
@@ -172,7 +148,7 @@ class TradingStrategy:
                 return {
                     'action': 'SELL',
                     'confidence': 0.90,
-                    'expected_return': current_return,
+                    'reason': f'stop_loss_{current_return:.2%}'
                 }
         
         return None
@@ -185,12 +161,9 @@ class TradingStrategy:
                 'confidence': 0.70,
                 'reason': 'downtrend_exit'
             }
-        return {
-            'action': 'HOLD',
-            'confidence': 0.0
-        }
+        return None
     
-    def _range_market_signal(self, indicators: Dict, has_position: bool) -> Optional[Dict]:
+    def _range_market_signal(self, indicators: Dict, has_position: bool, symbol: str) -> Optional[Dict]:
         """In ranging markets - buy low, sell high with tight targets"""
         if not has_position:
             # Buy at support (lower Bollinger Band)
@@ -203,36 +176,27 @@ class TradingStrategy:
                 return {
                     'action': 'BUY',
                     'confidence': 0.70,
-                    'take_profit': indicators['bb_middle'],  # Target middle band
-                    'stop_loss': indicators['close'] * 0.985,  # Tight 1.5% stop
                 }
         
-        else:
-            # Sell at resistance (upper Bollinger Band)
-            current_return = self._get_current_return(indicators)
+        elif has_position:
+            # Get entry price
+            entry_price = self.entry_prices.get(symbol, indicators['close'])
+            current_return = (indicators['close'] - entry_price) / entry_price
             
-            # Take profit quickly in ranges
-            if current_return > 0.01:  # 1% profit in range
+            # Take profit quickly in ranges (1% target)
+            if current_return > 0.01:
                 return {
                     'action': 'SELL',
                     'confidence': 0.75,
-                    'expected_return': current_return,
+                    'reason': f'range_profit_{current_return:.2%}'
+                }
+            
+            # Tight stop in ranges (1.5%)
+            if current_return < -0.015:
+                return {
+                    'action': 'SELL',
+                    'confidence': 0.80,
+                    'reason': f'range_stop_{current_return:.2%}'
                 }
         
         return None
-    
-    def _calculate_expected_return(self, df: pd.DataFrame, indicators: Dict) -> float:
-        """Calculate realistic expected return based on volatility"""
-        # Use ATR to estimate expected move
-        expected_move = indicators['atr_pct'] * 1.5
-        return min(0.05, expected_move)  # Cap at 5%
-    
-    def _get_entry_price(self, df: pd.DataFrame) -> float:
-        """Get entry price for existing position (simplified)"""
-        # In production, track this per symbol
-        return df['close'].iloc[-10]  # Placeholder
-    
-    def _get_current_return(self, indicators: Dict) -> float:
-        """Calculate current unrealized return"""
-        # Placeholder - should come from position tracker
-        return 0.0
