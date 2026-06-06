@@ -16,7 +16,7 @@ from broker import Broker
 from layer1_technical import technical_bot
 from ml_layer import MLSpecialist
 from layer3_judge import LLMJudge
-from risk import RiskManager, TrailingStopTracker
+from risk import RiskManager
 from sheet_logger import GoogleSheetLogger
 
 class TradingBot:
@@ -31,9 +31,7 @@ class TradingBot:
         self.ml_models: dict[str, MLSpecialist] = {}
         self.judge = LLMJudge()
         self.risk = RiskManager(max_drawdown=config.MAX_DRAWDOWN)
-        self.trailing_stop = TrailingStopTracker()
 
-        # Local persistence state across detached cron actions
         self.state_path = os.path.join(os.path.dirname(__file__), "bot_state.json")
         self.cooldowns = {}
         self.positions = {}
@@ -53,24 +51,24 @@ class TradingBot:
             try:
                 with open(self.state_path, "r") as f:
                     state = json.load(f)
-                    self.trailing_stop.peaks = state.get("peaks", {})
                     self.cooldowns = state.get("cooldowns", {})
                     self.positions = state.get("positions", {})
-                    print(f"✅ State loaded successfully. Current active tracked pairs: {list(self.positions.keys())}")
+                    print(f"✅ State loaded successfully. Tracked portfolio pairs: {list(self.positions.keys())}")
             except Exception as e:
-                print(f"⚠️ State load corrupted. Reinitializing: {e}")
+                print(f"⚠️ State load corrupted: {e}")
+                self.cooldowns = {}
+                self.positions = {}
 
     def save_bot_state(self):
         try:
             state = {
-                "peaks": self.trailing_stop.peaks,
                 "cooldowns": self.cooldowns,
                 "positions": self.positions
             }
             with open(self.state_path, "w") as f:
                 json.dump(state, f, indent=4)
         except Exception as e:
-            print(f"❌ Failed to persist engine context state to disk: {e}")
+            print(f"❌ Failed to persist context to disk: {e}")
 
     def _ensure_journal(self):
         if not os.path.exists(self.journal_path):
@@ -82,20 +80,29 @@ class TradingBot:
                     "regime", "threshold", "note"
                 ])
 
-    def _log(self, *args):
+    def _log(self, symbol, price, action, confidence, tech_signal, ml_prob, position_qty, equity, drawdown, traded, regime, threshold, note):
         try:
             row = [
-                datetime.now(UTC).isoformat(), args[0], round(float(args[1]), 4),
-                args[2], round(float(args[3]), 4), round(float(args[4]), 4),
-                round(float(args[5]), 4), round(float(args[6]), 4), round(float(args[7]), 2),
-                round(float(args[8]), 4), int(bool(args[9])), args[10],
-                round(float(args[11]), 4), str(args[12])
+                datetime.now(UTC).isoformat(),
+                str(symbol),
+                round(float(price), 4),
+                str(action),
+                round(float(confidence), 4),
+                round(float(tech_signal), 4),
+                round(float(ml_prob), 4),
+                round(float(position_qty), 4),
+                round(float(equity), 2),
+                round(float(drawdown), 4),
+                int(bool(traded)),
+                str(regime),
+                round(float(threshold), 4),
+                str(note)
             ]
             with open(self.journal_path, "a", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(row)
             self.sheet_logger.log_row(row)
         except Exception as e:
-            print(f"⚠️ Logging matrix indexing error: {e}")
+            print(f"❌ Logging Failure: {e}")
 
     def fetch_data(self, symbol: str) -> pd.DataFrame | None:
         try:
@@ -105,29 +112,43 @@ class TradingBot:
             bars = self.data_client.get_crypto_bars(req).df.reset_index()
             return bars[["timestamp", "open", "high", "low", "close", "volume"]].sort_values("timestamp").reset_index(drop=True)
         except Exception as e:
-            print(f"❌ Historical ingestion dropped for target {symbol}: {e}")
+            print(f"❌ Ingestion drop for {symbol}: {e}")
             return None
 
     def compute_buy_qty(self, price: float, buying_power: float, equity: float, confidence: float, volatility: float) -> float:
-        vol_scale = np.clip(0.015 / max(volatility, 1e-5), 0.6, 1.5)
-        conf_scale = np.clip((confidence - config.BASE_THRESHOLD) / 0.12, 0.4, 1.5)
+        safe_vol = max(volatility, 0.0001)
+        vol_scale = np.clip(0.015 / safe_vol, 0.6, 1.5)
         
-        target_fraction = config.POSITION_FRACTION * vol_scale * conf_scale
-        target_fraction = float(np.clip(target_fraction, config.MIN_EQUITY_FRACTION, config.MAX_EQUITY_FRACTION))
+        base_thresh = getattr(config, "BASE_THRESHOLD", 0.58)
+        conf_scale = np.clip((confidence - base_thresh) / 0.12, 0.4, 1.5)
         
-        target_allocation = min(equity * target_fraction, config.MAX_NOTIONAL_PER_TRADE)
-        target_allocation = min(target_allocation, buying_power * 0.92)
+        pos_fraction = getattr(config, "POSITION_FRACTION", 0.15)
+        min_fraction = getattr(config, "MIN_EQUITY_FRACTION", 0.05)
+        max_fraction = getattr(config, "MAX_EQUITY_FRACTION", 0.25)
         
-        if target_allocation < config.MIN_NOTIONAL_PER_TRADE:
+        target_fraction = pos_fraction * vol_scale * conf_scale
+        target_fraction = float(np.clip(target_fraction, min_fraction, max_fraction))
+        
+        max_notional = getattr(config, "MAX_NOTIONAL_PER_TRADE", 5000.0)
+        target_allocation = min(equity * target_fraction, max_notional)
+        target_allocation = min(target_allocation, buying_power * 0.95)
+        
+        min_notional = getattr(config, "MIN_NOTIONAL_PER_TRADE", 10.0)
+        if target_allocation < min_notional:
             return 0.0
+            
         return round(max(target_allocation / price, 0.0), 5)
 
     def run_cycle(self):
-        print(f"⚡ Execution Initialization: {datetime.now(UTC).isoformat()}")
-        acc = self.broker.get_account()
-        equity, buying_power = float(acc.equity), float(acc.buying_power)
-        drawdown = self.risk.update(equity)
+        print(f"⚡ GitHub Actions Cron Window Initialization: {datetime.now(UTC).isoformat()}")
+        try:
+            acc = self.broker.get_account()
+            equity, buying_power = float(acc.equity), float(acc.buying_power)
+        except Exception as e:
+            print(f"❌ Could not reach broker REST layer: {e}")
+            return
 
+        drawdown = self.risk.update(equity)
         if self.day_start_equity is None:
             self.day_start_equity = equity
         daily_loss = max(0.0, (self.day_start_equity - equity) / self.day_start_equity)
@@ -135,108 +156,109 @@ class TradingBot:
         now_ts = datetime.now(UTC).timestamp()
 
         for symbol in self.symbols:
-            df = self.fetch_data(symbol)
-            if df is None or len(df) < 30:
-                continue
-
-            current_price = float(df.iloc[-1]["close"])
-            existing_pos = self.positions.get(symbol)
-            
-            # Sync local database with state of broker
-            broker_pos = self.broker.get_position_info(symbol)
-            current_qty = float(broker_pos.get("qty", 0.0))
-
-            if current_qty == 0 and existing_pos:
-                del self.positions[symbol]
-                existing_pos = None
-
-            # Cooldown execution gate
-            if now_ts < self.cooldowns.get(symbol, 0.0):
-                continue
-
-            # Layer 2 Matrix Processing
-            model = MLSpecialist()
-            model.train_price_model(df)
-            
-            # Feature extraction vector mapping
-            d_feat = df.copy()
-            d_feat["return_1h"] = d_feat["close"].pct_change(1)
-            d_feat["volatility_6h"] = d_feat["return_1h"].rolling(6).std()
-            d_feat["ma_20_dist"] = (d_feat["close"] / d_feat["close"].rolling(20).mean()) - 1.0
-            d_feat = d_feat.dropna()
-            
-            if d_feat.empty:
-                continue
-                
-            ml_prob = float(model.predict(d_feat.iloc[-1]))
-            tech_signal = float(technical_bot(df))
-
-            # Consolidated Layer 3 Judge analysis
-            decision = self.judge.evaluate(tech_signal, ml_prob, df)
-            action, confidence, threshold, regime = decision["action"], decision["confidence"], decision["threshold"], decision["regime"]
-            volatility = decision["volatility"]
-
-            # General circuit evaluation
-            if not self.risk.allow_trading(equity) or (daily_loss >= config.MAX_DAILY_LOSS_PCT):
-                print("🛑 Circuit breakers triggered. Halting trade cycle additions.")
-                continue
-
-            # --- LIQUIDATION & EXIT FLOWS ---
-            if current_qty > 0 and existing_pos:
-                entry_price = float(existing_pos["entry_price"])
-                hold_hours = (datetime.now(UTC) - datetime.fromisoformat(existing_pos["entry_time"])).total_seconds() / 3600.0
-                
-                # Update rolling highs
-                self.trailing_stop.update_peak(symbol, current_price, entry_price)
-                stop_triggered, drop_amt = self.trailing_stop.should_exit(symbol, current_price)
-
-                # Fixed-range profit target routing
-                range_take_profit = (regime == "range" and current_price >= entry_price * (1.0 + config.MIN_PROFIT_TARGET_PCT))
-
-                if hold_hours >= config.MAX_HOLD_HOURS:
-                    self.broker.submit_order(symbol, "sell", current_qty)
-                    self.trailing_stop.on_exit(symbol)
-                    self.cooldowns[symbol] = now_ts + 14400
-                    del self.positions[symbol]
-                    self._log(symbol, current_price, "SELL", confidence, tech_signal, ml_prob, 0, equity, drawdown, True, regime, threshold, "max_hold_expiration")
-                
-                elif stop_triggered:
-                    self.broker.submit_order(symbol, "sell", current_qty)
-                    self.trailing_stop.on_exit(symbol)
-                    self.cooldowns[symbol] = now_ts + 14400
-                    del self.positions[symbol]
-                    self._log(symbol, current_price, "SELL", confidence, tech_signal, ml_prob, 0, equity, drawdown, True, regime, threshold, f"trailing_stop_triggered_{round(drop_amt*100,2)}%")
-                
-                elif range_take_profit:
-                    self.broker.submit_order(symbol, "sell", current_qty)
-                    self.trailing_stop.on_exit(symbol)
-                    self.cooldowns[symbol] = now_ts + 7200
-                    del self.positions[symbol]
-                    self._log(symbol, current_price, "SELL", confidence, tech_signal, ml_prob, 0, equity, drawdown, True, regime, threshold, "range_scalp_take_profit")
-
-            # --- CAPITAL ENGAGEMENT & ENTRIES ---
-            elif action == "BUY" and current_qty == 0:
-                current_portfolio = self.broker.get_all_positions()
-                allocated_capital = sum(float(p.qty) * float(p.current_price) for p in current_portfolio)
-                
-                if allocated_capital >= (equity * config.MAX_TOTAL_EXPOSURE_PCT):
+            try:
+                df = self.fetch_data(symbol)
+                if df is None or len(df) < 30:
                     continue
 
-                buy_qty = self.compute_buy_qty(current_price, buying_power, equity, confidence, volatility)
-                if regime == "bear_trend":
-                    buy_qty = round(buy_qty * 0.50, 5)  # Halve contract sizes during macro down trends
+                current_price = float(df.iloc[-1]["close"])
+                
+                # Check live exchange exposure directly to verify state consistency
+                broker_pos = self.broker.get_position_info(symbol)
+                current_qty = float(broker_pos.get("qty", 0.0))
 
-                if buy_qty > 0:
-                    order = self.broker.submit_order(symbol, "buy", buy_qty)
-                    if order:
-                        self.positions[symbol] = {
-                            "entry_price": current_price,
-                            "entry_time": datetime.now(UTC).isoformat(),
-                            "qty": buy_qty
-                        }
-                        self._log(symbol, current_price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, "strategic_entry")
+                if current_qty == 0 and symbol in self.positions:
+                    del self.positions[symbol]
 
-        # Atomic structural serialization commit
+                if now_ts < self.cooldowns.get(symbol, 0.0):
+                    continue
+
+                # --- 4-HOUR ALIGNED LOOKBACK MATRICES ---
+                d_feat = df.copy()
+                d_feat["return_4h"] = d_feat["close"].pct_change(4)  # 4 rows * 1 hour = 4-hour window returns
+                d_feat["volatility_24h"] = d_feat["return_4h"].rolling(24).std() # Captures full day volatility trends
+                d_feat["ma_20_dist"] = (d_feat["close"] / d_feat["close"].rolling(20).mean()) - 1.0
+                d_feat = d_feat.dropna()
+                
+                if d_feat.empty:
+                    continue
+                    
+                if symbol not in self.ml_models:
+                    self.ml_models[symbol] = MLSpecialist()
+                
+                model = self.ml_models[symbol]
+                model.train_price_model(df)
+                
+                ml_prob = float(model.predict(d_feat.iloc[-1]))
+                tech_signal = float(technical_bot(df))
+
+                try:
+                    decision = self.judge.evaluate(tech_signal, ml_prob, df)
+                except TypeError:
+                    decision = self.judge.evaluate(tech_signal, ml_prob)
+
+                action, confidence, threshold, regime = decision["action"], decision["confidence"], decision["threshold"], decision["regime"]
+                volatility = decision.get("volatility", 0.015)
+
+                if not self.risk.allow_trading(equity) or (daily_loss >= config.MAX_DAILY_LOSS_PCT):
+                    self._log(symbol, current_price, "HOLD", confidence, tech_signal, ml_prob, current_qty, equity, drawdown, False, regime, threshold, "risk_circuit_breaker_active")
+                    continue
+
+                # --- UNMANAGED MONITORING PASS ---
+                if current_qty > 0:
+                    # Let Alpaca's cloud system handle active trailing/bracket exits.
+                    # We just track status via logs here every 4 hours.
+                    self._log(symbol, current_price, "HOLD", confidence, tech_signal, ml_prob, current_qty, equity, drawdown, False, regime, threshold, "monitored_by_exchange_bracket")
+                    continue
+
+                # --- STRATEGIC CAPITAL ENGAGEMENT ---
+                elif action == "BUY" and current_qty == 0:
+                    current_portfolio = self.broker.get_all_positions()
+                    allocated_capital = sum(float(p.qty) * float(p.current_price) for p in current_portfolio)
+                    
+                    if allocated_capital >= (equity * config.MAX_TOTAL_EXPOSURE_PCT):
+                        self._log(symbol, current_price, "OUT", confidence, tech_signal, ml_prob, current_qty, equity, drawdown, False, regime, threshold, "skip_max_exposure_limit")
+                        continue
+
+                    buy_qty = self.compute_buy_qty(current_price, buying_power, equity, confidence, volatility)
+                    if regime == "bear_trend":
+                        buy_qty = round(buy_qty * 0.50, 5)
+
+                    if buy_qty > 0:
+                        # Derive rigid limit boundaries directly from configurations
+                        profit_pct = getattr(config, "MIN_PROFIT_TARGET_PCT", 0.04)
+                        stop_pct = getattr(config, "MAX_DAILY_LOSS_PCT", 0.02)
+
+                        tp_price = current_price * (1.0 + profit_pct)
+                        sl_price = current_price * (1.0 - stop_pct)
+
+                        # Submit atomic order containing entry, take profit, and stop loss values
+                        order = self.broker.submit_order(
+                            symbol=symbol,
+                            side="buy",
+                            qty=buy_qty,
+                            take_profit_price=tp_price,
+                            stop_loss_price=sl_price
+                        )
+                        
+                        if order:
+                            self.positions[symbol] = {
+                                "entry_price": current_price,
+                                "entry_time": datetime.now(UTC).isoformat(),
+                                "qty": buy_qty
+                            }
+                            self._log(symbol, current_price, "BUY", confidence, tech_signal, ml_prob, buy_qty, equity, drawdown, True, regime, threshold, f"bracket_entry_tp_{round(tp_price,2)}_sl_{round(sl_price,2)}")
+                    else:
+                        self._log(symbol, current_price, "OUT", confidence, tech_signal, ml_prob, current_qty, equity, drawdown, False, regime, threshold, "under_min_notional_floor")
+
+                else:
+                    self._log(symbol, current_price, "OUT", confidence, tech_signal, ml_prob, current_qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
+            
+            except Exception as e:
+                print(f"❌ Error encountered inside loop execution footprint: {e}")
+                traceback.print_exc()
+                continue
+        
         self.save_bot_state()
 
 if __name__ == "__main__":
