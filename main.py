@@ -4,7 +4,7 @@ import sys
 import json
 import traceback
 from datetime import UTC, datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -15,111 +15,74 @@ from alpaca.data.timeframe import TimeFrame
 import config
 from broker import Broker
 from strategy import TradingStrategy
-from risk import RiskManager, PositionTracker
 
 class TradingBot:
     def __init__(self):
-        """Initialize bot with conservative, profit-focused settings"""
-        self._validate_config()
-        
         self.symbols = config.TRADE_SYMBOLS
-        self.broker = Broker(config.ALPACA_API_KEY, config.ALPACA_SECRET_KEY)
+        self.broker = Broker(config.APCA_API_KEY_ID, config.APCA_API_SECRET_KEY)
         self.data_client = CryptoHistoricalDataClient()
         self.strategy = TradingStrategy()
-        self.risk = RiskManager()
-        self.positions = PositionTracker()
         
-        # Track daily stats
-        self.daily_pnl = 0.0
-        self.daily_trades = 0
-        self.last_reset_date = datetime.now(UTC).date()
+        # State file for remembering positions across runs
+        self.state_file = os.path.join(os.path.dirname(__file__), "bot_state.json")
+        self.positions = {}  # {symbol: {'entry_price': float, 'entry_time': str, 'qty': float}}
         
-        # Load state
-        self.state_path = os.path.join(os.path.dirname(__file__), "bot_state.json")
+        # Load previous state
         self._load_state()
         
         # Setup logging
-        self.log_path = os.path.join(os.path.dirname(__file__), config.TRADE_LOG_CSV)
+        self.log_file = os.path.join(os.path.dirname(__file__), "trades.csv")
         self._init_log()
         
-        print(f"🤖 Bot initialized for {', '.join(self.symbols)}")
-        print(f"📊 Max exposure: {config.MAX_TOTAL_EXPOSURE_PCT*100}%")
-        print(f"🎯 Min profit target: {config.MIN_PROFIT_TARGET_PCT*100}%")
-    
-    def _validate_config(self):
-        """Ensure config values are profitable"""
-        if config.MIN_PROFIT_TARGET_PCT < 0.01:
-            raise ValueError("MIN_PROFIT_TARGET_PCT must be at least 1% to cover fees")
-        if config.MAX_POSITION_SIZE_PCT > 0.25:
-            raise ValueError("MAX_POSITION_SIZE_PCT too high - limit to 25% for safety")
+        print(f"🤖 Bot started at {datetime.now(UTC)}")
+        print(f"📊 Active positions from last run: {len(self.positions)}")
+        for sym, pos in self.positions.items():
+            print(f"   └─ {sym}: {pos['qty']} @ ${pos['entry_price']:.2f}")
     
     def _load_state(self):
-        """Load persistent state"""
-        if os.path.exists(self.state_path):
+        """Load positions from previous runs"""
+        if os.path.exists(self.state_file):
             try:
-                with open(self.state_path, 'r') as f:
-                    state = json.load(f)
-                    self.positions.load(state.get('positions', {}))
-                    self.daily_pnl = state.get('daily_pnl', 0.0)
-                    self.daily_trades = state.get('daily_trades', 0)
+                with open(self.state_file, 'r') as f:
+                    data = json.load(f)
+                    self.positions = data.get('positions', {})
+                    print(f"✅ Loaded {len(self.positions)} positions from previous run")
             except Exception as e:
                 print(f"⚠️ Could not load state: {e}")
+                self.positions = {}
+        else:
+            self.positions = {}
     
     def _save_state(self):
-        """Save persistent state"""
+        """Save positions for next run"""
         state = {
-            'positions': self.positions.save(),
-            'daily_pnl': self.daily_pnl,
-            'daily_trades': self.daily_trades,
-            'last_date': self.last_reset_date.isoformat()
+            'positions': self.positions,
+            'last_update': datetime.now(UTC).isoformat()
         }
-        with open(self.state_path, 'w') as f:
+        with open(self.state_file, 'w') as f:
             json.dump(state, f, indent=2)
+        print(f"💾 Saved {len(self.positions)} positions for next run")
     
     def _init_log(self):
         """Initialize trade log"""
-        if not os.path.exists(self.log_path):
-            with open(self.log_path, 'w', newline='') as f:
+        if not os.path.exists(self.log_file):
+            with open(self.log_file, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow([
-                    'timestamp', 'symbol', 'action', 'price', 'qty',
-                    'pnl', 'total_pnl', 'reason', 'confidence'
-                ])
+                writer.writerow(['timestamp', 'symbol', 'action', 'price', 'qty', 'pnl', 'reason'])
     
-    def _log_trade(self, symbol: str, action: str, price: float, qty: float,
-                   pnl: float, total_pnl: float, reason: str, confidence: float):
-        """Log trade with P&L tracking"""
-        row = [
-            datetime.now(UTC).isoformat(),
-            symbol, action, round(price, 2), round(qty, 6),
-            round(pnl, 2), round(total_pnl, 2), reason, round(confidence, 3)
-        ]
-        with open(self.log_path, 'a', newline='') as f:
-            csv.writer(f).writerow(row)
-        
-        # Console output for monitoring
-        if action == 'SELL':
-            print(f"💰 {symbol}: {action} at ${price:,.2f} | P&L: ${pnl:+.2f} | Total: ${total_pnl:,.2f} | {reason}")
-        else:
-            print(f"📈 {symbol}: {action} at ${price:,.2f} | {reason}")
-    
-    def _reset_daily_stats(self):
-        """Reset daily P&L at midnight UTC"""
-        today = datetime.now(UTC).date()
-        if today != self.last_reset_date:
-            print(f"📅 Daily reset - Yesterday P&L: ${self.daily_pnl:,.2f} over {self.daily_trades} trades")
-            self.daily_pnl = 0.0
-            self.daily_trades = 0
-            self.last_reset_date = today
-            self._save_state()
+    def _log_trade(self, symbol: str, action: str, price: float, qty: float, pnl: float, reason: str):
+        """Log trade"""
+        with open(self.log_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([datetime.now(UTC).isoformat(), symbol, action, round(price, 2), qty, round(pnl, 2), reason])
+        print(f"📝 {symbol}: {action} ${price:.2f} | P&L: ${pnl:.2f} | {reason}")
     
     def fetch_data(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Fetch historical data with sufficient length"""
+        """Fetch historical data"""
         try:
             end = datetime.now(UTC)
-            start = end - timedelta(hours=config.LOOKBACK_HOURS)
+            start = end - timedelta(hours=168)  # 7 days
             
-            # Remove /USD for Alpaca API
             clean_symbol = symbol.replace('/USD', '')
             
             request = CryptoBarsRequest(
@@ -134,200 +97,142 @@ class TradingBot:
                 return None
             
             bars = bars.reset_index()
-            bars['symbol'] = symbol
             bars = bars[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
-            bars = bars.sort_values('timestamp').drop_duplicates('timestamp')
-            
-            return bars
+            return bars.sort_values('timestamp')
             
         except Exception as e:
             print(f"❌ Data fetch failed for {symbol}: {e}")
             return None
     
-    def calculate_position_size(self, symbol: str, price: float, confidence: float,
-                                account_equity: float, current_exposure: float) -> float:
-        """Calculate position size with profit focus"""
-        # Base size from config
-        base_size_pct = config.MAX_POSITION_SIZE_PCT
-        
-        # Adjust for confidence (higher confidence = larger position)
-        confidence_multiplier = min(1.5, max(0.5, confidence / config.MIN_CONFIDENCE_THRESHOLD))
-        
-        # Adjust for current exposure (less room = smaller position)
-        remaining_capacity = config.MAX_TOTAL_EXPOSURE_PCT - current_exposure
-        if remaining_capacity <= 0:
-            return 0.0
-        
-        exposure_multiplier = min(1.0, remaining_capacity / config.MAX_POSITION_SIZE_PCT)
-        
-        # Final size
-        target_equity_pct = base_size_pct * confidence_multiplier * exposure_multiplier
-        target_equity_pct = min(target_equity_pct, remaining_capacity)
-        
-        target_notional = account_equity * target_equity_pct
-        
-        # Minimum trade size check (must be worth the fees)
-        min_profit_dollars = target_notional * config.MIN_PROFIT_TARGET_PCT
-        if min_profit_dollars < 5.0:
-            return 0.0
-        
-        qty = target_notional / price
-        return round(qty, 6)
-    
     def run_cycle(self):
-        """Main trading cycle - quality over quantity"""
+        """Main trading cycle - REMEMBERS positions between runs"""
         print(f"\n{'='*60}")
-        print(f"🔄 Trading Cycle: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
+        print(f"🔄 Trading Cycle at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
         print(f"{'='*60}")
         
-        # Reset daily stats
-        self._reset_daily_stats()
-        
-        # Get account status
+        # Get account info
         try:
             account = self.broker.get_account()
-            account_equity = float(account.equity)
-            buying_power = float(account.buying_power)
+            equity = float(account.equity)
         except Exception as e:
-            print(f"❌ Cannot fetch account: {e}")
+            print(f"❌ Cannot get account: {e}")
             return
         
-        # Check if we should trade today
-        if not self.risk.can_trade(account_equity, self.daily_pnl):
-            print("⏸️ Risk limits reached - skipping cycle")
-            return
+        print(f"💰 Account Equity: ${equity:,.2f}")
         
-        # Calculate current exposure
-        current_positions = self.broker.get_all_positions()
-        current_exposure = 0.0
-        for p in current_positions:
-            try:
-                current_exposure += float(p.qty) * float(p.current_price)
-            except:
-                pass
-        current_exposure = current_exposure / account_equity if account_equity > 0 else 0
-        
-        print(f"💰 Account Equity: ${account_equity:,.2f}")
-        print(f"📊 Current Exposure: {current_exposure*100:.1f}%")
-        print(f"📈 Daily P&L: ${self.daily_pnl:+.2f}")
-        
-        # Track total P&L for this cycle
-        cycle_pnl = 0.0
-        
-        # Process each symbol
-        for symbol in self.symbols:
-            print(f"\n--- {symbol} ---")
+        # FIRST: Check existing positions (from previous runs)
+        print(f"\n📊 Checking {len(self.positions)} existing positions...")
+        for symbol in list(self.positions.keys()):
+            position = self.positions[symbol]
+            entry_price = position['entry_price']
+            entry_time = datetime.fromisoformat(position['entry_time'])
+            qty = position['qty']
+            hold_hours = (datetime.now(UTC) - entry_time).total_seconds() / 3600
             
-            # Fetch data
+            # Get current price
             df = self.fetch_data(symbol)
-            if df is None or len(df) < 50:
-                print(f"⚠️ Insufficient data for {symbol}")
+            if df is None:
                 continue
-            
-            # Get current position
-            position = self.broker.get_position_info(symbol)
-            current_qty = float(position.get('qty', 0.0))
             current_price = float(df.iloc[-1]['close'])
-            position_value = current_qty * current_price
             
-            # Get trading signal
-            signal = self.strategy.analyze(df, current_qty > 0, symbol)
+            # Calculate P&L
+            pnl_pct = (current_price - entry_price) / entry_price
+            pnl_usd = pnl_pct * (qty * entry_price)
             
-            if signal is None:
-                print(f"⏸️ No clear signal for {symbol}")
-                continue
+            print(f"   └─ {symbol}: Held {hold_hours:.1f}h | P&L: {pnl_pct:.2%} (${pnl_usd:+.2f})")
             
-            print(f"🎯 Signal: {signal['action']} | Confidence: {signal['confidence']:.2%}")
-            print(f"📊 Regime: {signal['regime']}")
+            # EXIT CONDITIONS:
+            exit_signal = False
+            exit_reason = ""
             
-            # --- EXIT LOGIC (Close positions first) ---
-            if current_qty > 0 and signal['action'] == 'SELL':
-                should_exit = False
-                exit_reason = ""
-                
-                # Force exit after max hold time
-                hold_hours = self.positions.get_hold_hours(symbol)
-                if hold_hours >= config.MAX_HOLD_HOURS:
-                    should_exit = True
-                    exit_reason = f"max_hold_{config.MAX_HOLD_HOURS}h"
-                
-                # Judge says sell
-                elif signal['action'] == 'SELL':
-                    should_exit = True
-                    exit_reason = signal.get('reason', 'signal_exit')
-                
-                if should_exit:
-                    try:
-                        # Execute sell
-                        self.broker.submit_order(symbol, qty=current_qty, side='sell')
-                        
-                        # Calculate P&L
-                        avg_entry = self.positions.get_entry_price(symbol)
-                        pnl = (current_price - avg_entry) * current_qty
-                        self.daily_pnl += pnl
-                        self.daily_trades += 1
-                        cycle_pnl += pnl
-                        
-                        self._log_trade(symbol, 'SELL', current_price, current_qty,
-                                      pnl, self.daily_pnl, exit_reason, signal['confidence'])
-                        
-                        # Remove from position tracker
-                        self.positions.remove(symbol)
-                        
-                    except Exception as e:
-                        print(f"❌ Sell failed: {e}")
+            # 1. Take profit at 2-3% (scalp success)
+            if pnl_pct >= 0.025:  # 2.5% profit
+                exit_signal = True
+                exit_reason = f"take_profit_{pnl_pct:.2%}"
             
-            # --- ENTRY LOGIC (Only if no position) ---
-            elif current_qty == 0 and signal['action'] == 'BUY':
-                # Check minimum requirements
-                if signal['confidence'] < config.MIN_CONFIDENCE_THRESHOLD:
-                    print(f"❌ Confidence too low: {signal['confidence']:.2%} < {config.MIN_CONFIDENCE_THRESHOLD:.2%}")
-                    continue
-                
-                # Calculate position size
-                qty = self.calculate_position_size(
-                    symbol, current_price, signal['confidence'],
-                    account_equity, current_exposure
-                )
-                
-                if qty <= 0:
-                    print(f"❌ Position size too small (${qty * current_price:.2f})")
-                    continue
-                
-                # Execute buy
-                try:
-                    self.broker.submit_order(symbol, qty=qty, side='buy')
-                    
-                    self._log_trade(symbol, 'BUY', current_price, qty, 0, self.daily_pnl,
-                                  f"signal_{signal['regime']}", signal['confidence'])
-                    
-                    # Track position
-                    self.positions.add(symbol, current_price, qty, signal)
-                    
-                    # Update exposure
-                    current_exposure += (qty * current_price) / account_equity
-                    
-                except Exception as e:
-                    print(f"❌ Buy failed: {e}")
+            # 2. Stop loss at 2%
+            elif pnl_pct <= -0.02:  # 2% loss
+                exit_signal = True
+                exit_reason = f"stop_loss_{pnl_pct:.2%}"
             
+            # 3. Max hold time (48 hours)
+            elif hold_hours >= 48:
+                exit_signal = True
+                exit_reason = f"max_hold_{hold_hours:.0f}h"
+            
+            # 4. New signal says sell
             else:
-                # Hold or wait
-                if current_qty > 0:
-                    hold_hours = self.positions.get_hold_hours(symbol)
-                    avg_entry = self.positions.get_entry_price(symbol)
-                    unrealized_pnl = (current_price - avg_entry) * current_qty
-                    print(f"💎 Holding {symbol}: {hold_hours:.1f}h | Unrealized: ${unrealized_pnl:+.2f}")
-                else:
-                    print(f"⏸️ Waiting for entry signal")
+                # Get fresh signal
+                signal = self.strategy.analyze(df, has_position=True, symbol=symbol)
+                if signal and signal.get('action') == 'SELL':
+                    exit_signal = True
+                    exit_reason = signal.get('reason', 'signal_exit')
+            
+            if exit_signal:
+                try:
+                    # SELL the position
+                    self.broker.submit_order(symbol, qty=qty, side='sell')
+                    self._log_trade(symbol, 'SELL', current_price, qty, pnl_usd, exit_reason)
+                    del self.positions[symbol]  # Remove from memory
+                    print(f"   ✅ EXITED {symbol}: {exit_reason}")
+                except Exception as e:
+                    print(f"   ❌ Exit failed: {e}")
+            else:
+                print(f"   💎 HOLDING {symbol}: Target 2.5% profit, currently {pnl_pct:.2%}")
         
-        # End of cycle summary
-        print(f"\n{'='*60}")
-        print(f"✅ Cycle Complete | Today's P&L: ${self.daily_pnl:+.2f}")
-        print(f"📊 Total Trades Today: {self.daily_trades}")
-        print(f"{'='*60}\n")
+        # SECOND: Look for NEW entries (only if we have < 3 positions)
+        if len(self.positions) < 3:  # Max 3 concurrent positions
+            print(f"\n🔍 Looking for new entries (current positions: {len(self.positions)}/3)...")
+            
+            for symbol in self.symbols:
+                # Skip if we already have this symbol
+                if symbol in self.positions:
+                    continue
+                
+                df = self.fetch_data(symbol)
+                if df is None or len(df) < 50:
+                    continue
+                
+                current_price = float(df.iloc[-1]['close'])
+                
+                # Get trading signal
+                signal = self.strategy.analyze(df, has_position=False, symbol=symbol)
+                
+                if signal and signal.get('action') == 'BUY':
+                    confidence = signal.get('confidence', 0)
+                    
+                    if confidence >= config.MIN_CONFIDENCE_THRESHOLD:
+                        # Calculate position size (5-10% of equity per trade)
+                        position_size_pct = 0.075  # 7.5% per trade
+                        qty = (equity * position_size_pct) / current_price
+                        qty = round(qty, 6)
+                        
+                        if qty > 0:
+                            try:
+                                self.broker.submit_order(symbol, qty=qty, side='buy')
+                                
+                                # Remember this position for next run
+                                self.positions[symbol] = {
+                                    'entry_price': current_price,
+                                    'entry_time': datetime.now(UTC).isoformat(),
+                                    'qty': qty
+                                }
+                                
+                                self._log_trade(symbol, 'BUY', current_price, qty, 0, signal.get('reason', 'entry'))
+                                print(f"   ✅ ENTERED {symbol}: {qty} @ ${current_price:.2f}")
+                                
+                            except Exception as e:
+                                print(f"   ❌ Entry failed: {e}")
         
-        # Save state
+        # Save state for next run
         self._save_state()
+        
+        # Summary
+        print(f"\n{'='*60}")
+        print(f"✅ Cycle Complete")
+        print(f"📊 Active positions: {len(self.positions)}")
+        print(f"💾 State saved for next run in 4 hours")
+        print(f"{'='*60}\n")
 
 if __name__ == "__main__":
     try:
