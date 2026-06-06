@@ -16,7 +16,7 @@ from broker import Broker
 from layer1_technical import technical_bot
 from layer3_judge import LLMJudge
 from ml_layer import MLSpecialist
-from risk_manager import RiskManager, TrailingStopTracker
+from risk import RiskManager, TrailingStopTracker
 from sheet_logger import GoogleSheetLogger
 
 try:
