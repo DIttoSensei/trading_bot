@@ -6,8 +6,8 @@ load_dotenv()
 # ============================================
 # API CONFIGURATION
 # ============================================
-APCA_API_KEY_ID = os.getenv("ALPACA_API_KEY")
-APCA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+ALPACA_API_KEY = os.getenv("APCA_API_KEY_ID")
+ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
 
 # ============================================
 # TRADING SYMBOLS (Start with just 1-2)
