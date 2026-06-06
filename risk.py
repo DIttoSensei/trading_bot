@@ -1,91 +1,129 @@
-import json
+import numpy as np
 from datetime import datetime, UTC
-from typing import Dict, Tuple
-import config
+from typing import Dict, Optional
 
 class RiskManager:
-    """Risk management focused on capital preservation"""
+    """Manages overall portfolio risk"""
     
-    def __init__(self):
-        self.consecutive_losses = 0
+    def __init__(self, max_drawdown: float = 0.15):
+        self.max_drawdown = max_drawdown
+        self.peak_equity = None
+        self.current_drawdown = 0.0
+    
+    def update(self, current_equity: float) -> float:
+        """Update drawdown based on current equity"""
+        if self.peak_equity is None or current_equity > self.peak_equity:
+            self.peak_equity = current_equity
+        
+        if self.peak_equity > 0:
+            self.current_drawdown = (self.peak_equity - current_equity) / self.peak_equity
+        
+        return self.current_drawdown
+    
+    def allow_trading(self, current_equity: float) -> bool:
+        """Check if we should continue trading"""
+        drawdown = self.update(current_equity)
+        return drawdown < self.max_drawdown
     
     def can_trade(self, account_equity: float, daily_pnl: float) -> bool:
-        """Check if we should continue trading"""
-        # Check daily loss limit
+        """Additional check for daily limits"""
+        # Import config here to avoid circular imports
+        import config
         daily_loss_pct = abs(daily_pnl) / account_equity if account_equity > 0 else 0
-        if daily_loss_pct > config.MAX_DAILY_LOSS_PCT:
-            print(f"⚠️ Daily loss limit reached: {daily_loss_pct:.2%}")
-            return False
-        
-        return True
-    
-    def update_trade_result(self, pnl: float):
-        """Update risk metrics after trade"""
-        if pnl < 0:
-            self.consecutive_losses += 1
-        else:
-            self.consecutive_losses = 0
+        return daily_loss_pct < config.MAX_DAILY_LOSS_PCT
 
-class PositionTracker:
-    """Track open positions with entry prices and timing"""
+
+class TrailingStopTracker:
+    """Tracks trailing stop peaks for each symbol"""
     
     def __init__(self):
-        self.positions = {}
-        self.strategy = None  # Will be set later
+        self.peaks = {}  # symbol -> highest price seen
+        self.activation_pct = 0.02  # 2% profit needed to activate trailing stop
+        self.trailing_pct = 0.01  # 1% trailing distance
     
-    def set_strategy(self, strategy):
-        """Set strategy reference to update entry prices"""
-        self.strategy = strategy
+    def update_peak(self, symbol: str, current_price: float):
+        """Update the peak price for a symbol"""
+        current_peak = self.peaks.get(symbol, current_price)
+        if current_price > current_peak:
+            self.peaks[symbol] = current_price
     
-    def add(self, symbol: str, price: float, qty: float, signal: Dict):
-        """Track new position"""
+    def should_exit(self, symbol: str, current_price: float) -> tuple[bool, float]:
+        """Check if trailing stop has been triggered"""
+        if symbol not in self.peaks:
+            return False, 0.0
+        
+        peak = self.peaks[symbol]
+        
+        # Calculate drop from peak
+        drop_pct = (peak - current_price) / peak if peak > 0 else 0
+        
+        # Check if trailing stop is triggered
+        triggered = drop_pct >= self.trailing_pct
+        
+        return triggered, drop_pct
+    
+    def on_exit(self, symbol: str):
+        """Clean up when position is closed"""
+        if symbol in self.peaks:
+            del self.peaks[symbol]
+    
+    def get_peak(self, symbol: str) -> float:
+        """Get current peak for a symbol"""
+        return self.peaks.get(symbol, 0.0)
+
+
+class PositionTracker:
+    """Track open positions across GitHub runs"""
+    
+    def __init__(self):
+        self.positions = {}  # symbol -> position data
+    
+    def add(self, symbol: str, entry_price: float, qty: float, signal: Dict = None):
+        """Add a new position"""
         self.positions[symbol] = {
-            'entry_price': price,
-            'entry_time': datetime.now(UTC),
+            'entry_price': entry_price,
+            'entry_time': datetime.now(UTC).isoformat(),
             'qty': qty,
-            'signal': signal
+            'signal': signal or {}
         }
-        # Update strategy's entry price tracker
-        if self.strategy:
-            self.strategy.entry_prices[symbol] = price
     
     def remove(self, symbol: str):
-        """Remove position"""
+        """Remove a position"""
         if symbol in self.positions:
             del self.positions[symbol]
-        # Clean up strategy tracker
-        if self.strategy and symbol in self.strategy.entry_prices:
-            del self.strategy.entry_prices[symbol]
+    
+    def get(self, symbol: str) -> Optional[Dict]:
+        """Get position for a symbol"""
+        return self.positions.get(symbol)
     
     def get_entry_price(self, symbol: str) -> float:
-        """Get entry price for symbol"""
-        return self.positions.get(symbol, {}).get('entry_price', 0.0)
+        """Get entry price for a symbol"""
+        pos = self.positions.get(symbol)
+        return pos['entry_price'] if pos else 0.0
     
     def get_hold_hours(self, symbol: str) -> float:
-        """Get hours held"""
-        if symbol not in self.positions:
+        """Get hours held for a symbol"""
+        pos = self.positions.get(symbol)
+        if not pos:
             return 0.0
         
-        entry_time = self.positions[symbol]['entry_time']
+        entry_time = datetime.fromisoformat(pos['entry_time'])
         hours = (datetime.now(UTC) - entry_time).total_seconds() / 3600
         return hours
     
+    def get_all(self) -> Dict:
+        """Get all positions"""
+        return self.positions
+    
     def load(self, data: Dict):
-        """Load from state"""
+        """Load positions from state"""
         for symbol, pos_data in data.items():
-            pos_data['entry_time'] = datetime.fromisoformat(pos_data['entry_time'])
             self.positions[symbol] = pos_data
-            if self.strategy:
-                self.strategy.entry_prices[symbol] = pos_data['entry_price']
     
     def save(self) -> Dict:
-        """Save to state"""
-        save_data = {}
-        for symbol, pos_data in self.positions.items():
-            save_data[symbol] = {
-                'entry_price': pos_data['entry_price'],
-                'entry_time': pos_data['entry_time'].isoformat(),
-                'qty': pos_data['qty'],
-                'signal': pos_data.get('signal', {})
-            }
-        return save_data
+        """Save positions to state"""
+        return self.positions
+    
+    def count(self) -> int:
+        """Number of active positions"""
+        return len(self.positions)
