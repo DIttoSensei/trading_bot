@@ -1,6 +1,6 @@
 import numpy as np
 from datetime import datetime, UTC
-from typing import Dict, tuple
+from typing import Dict
 import config
 
 class RiskManager:
