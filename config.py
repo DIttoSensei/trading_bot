@@ -3,6 +3,26 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# API Keys
+APCA_API_KEY_ID = os.getenv("APCA_API_KEY_ID")
+APCA_API_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
+
+# Trading symbols
+TRADE_SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD"]
+
+# Risk Management
+MIN_CONFIDENCE_THRESHOLD = 0.60  # Lowered to catch more setups
+MAX_POSITIONS = 3  # Max 3 concurrent positions
+
+# The bot will now:
+# - BUY at 10:00 UTC
+# - HOLD position
+# - CHECK again at 14:00 UTC
+# - SELL if profit >= 2.5% OR loss >= 2% OR max hold 48himport os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # ============================================
 # API CONFIGURATION
 # ============================================
