@@ -3,67 +3,62 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# API Keys
+# ============================================
+# API KEYS
+# ============================================
 APCA_API_KEY_ID = os.getenv("APCA_API_KEY_ID")
 APCA_API_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
 
-# Trading symbols
+# Alias for compatibility
+ALPACA_API_KEY = APCA_API_KEY_ID
+ALPACA_SECRET_KEY = APCA_API_SECRET_KEY
+
+# ============================================
+# TRADING CONFIGURATION
+# ============================================
 TRADE_SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD"]
-
-# Risk Management
-MIN_CONFIDENCE_THRESHOLD = 0.60  # Lowered to catch more setups
-MAX_POSITIONS = 3  # Max 3 concurrent positions
-
-# The bot will now:
-# - BUY at 10:00 UTC
-# - HOLD position
-# - CHECK again at 14:00 UTC
-# - SELL if profit >= 2.5% OR loss >= 2% OR max hold 48himport os
-from dotenv import load_dotenv
-
-load_dotenv()
+LOOKBACK_HOURS = 168  # 7 days
+ML_TRAIN_MIN_ROWS = 200
 
 # ============================================
-# API CONFIGURATION
+# RISK MANAGEMENT
 # ============================================
-ALPACA_API_KEY = os.getenv("APCA_API_KEY_ID")
-ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
+MAX_POSITION_SIZE_PCT = 0.15  # Max 15% per trade
+MAX_TOTAL_EXPOSURE_PCT = 0.40  # Max 40% total deployed
+MAX_DAILY_LOSS_PCT = 0.05  # Stop at 5% daily loss
+MAX_DRAWDOWN = 0.15  # Max 15% drawdown
 
 # ============================================
-# TRADING SYMBOLS (Start with just 1-2)
+# TRADE FILTERS
 # ============================================
-TRADE_SYMBOLS = ["BTC/USD", "ETH/USD"]  # Start with only these
+MIN_CONFIDENCE_THRESHOLD = 0.55  # Lowered for more trades
+MIN_PROFIT_TARGET_PCT = 0.015  # 1.5% minimum profit
+MAX_SPREAD_PCT = 0.002
 
 # ============================================
-# RISK MANAGEMENT (CONSERVATIVE FOR PROFITABILITY)
-# ============================================
-MAX_POSITION_SIZE_PCT = 0.15  # Max 15% of portfolio per trade (reduced from 25%)
-MAX_TOTAL_EXPOSURE_PCT = 0.40  # Max 40% total deployed (reduced from unlimited)
-MAX_DAILY_LOSS_PCT = 0.05  # Stop trading after 5% daily loss
-MAX_DRAWDOWN = 0.15  # Max 15% drawdown before shutdown
-
-# ============================================
-# TRADE FILTERS (Quality over quantity)
-# ============================================
-MIN_CONFIDENCE_THRESHOLD = 0.65  # Increased from 0.30-0.50
-MIN_PROFIT_TARGET_PCT = 0.015  # 1.5% minimum expected profit (covers fees + spread)
-MAX_SPREAD_PCT = 0.002  # 0.2% max spread (avoid high-spread hours)
-
-# ============================================
-# TECHNICAL INDICATORS
-# ============================================
-LOOKBACK_HOURS = 168  # 7 days (increased from shorter periods)
-ML_TRAIN_MIN_ROWS = 200  # Minimum data for ML
-
-# ============================================
-# EXIT STRATEGY (Let winners run)
+# EXIT STRATEGY
 # ============================================
 TRAILING_STOP_ACTIVATION_PCT = 0.02  # Start trailing after 2% profit
 TRAILING_STOP_DISTANCE_PCT = 0.01  # Trail by 1%
 MAX_HOLD_HOURS = 48  # Force exit after 48 hours
 
 # ============================================
-# MEMORY & STATE
+# THRESHOLDS
+# ============================================
+BASE_THRESHOLD = 0.55
+MAX_THRESHOLD = 0.80
+
+# ============================================
+# POSITION SIZING
+# ============================================
+POSITION_FRACTION = 0.15
+MIN_EQUITY_FRACTION = 0.05
+MAX_EQUITY_FRACTION = 0.25
+MAX_NOTIONAL_PER_TRADE = 5000
+MIN_NOTIONAL_PER_TRADE = 10
+
+# ============================================
+# LOGGING
 # ============================================
 TRADE_LOG_CSV = "trade_log.csv"
 GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
