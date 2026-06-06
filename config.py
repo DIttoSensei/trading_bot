@@ -1,56 +1,50 @@
 import os
+from dotenv import load_dotenv
 
-# Alpaca keys
-ALPACA_API_KEY = os.getenv("APCA_API_KEY_ID", os.getenv("ALPACA_API_KEY", ""))
-ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY", os.getenv("ALPACA_SECRET_KEY", ""))
-ALPACA_PAPER = True
+load_dotenv()
 
-# Core trading setup
-SYMBOL = os.getenv("TRADE_SYMBOL", "BTC/USD")
-TRADE_SYMBOLS = ["BTC/USD", "SOL/USD", "DOGE/USD"]
-POSITION_FRACTION = float(os.getenv("POSITION_FRACTION", "0.60"))
-MIN_EQUITY_FRACTION = float(os.getenv("MIN_EQUITY_FRACTION", "0.15"))
-MAX_EQUITY_FRACTION = float(os.getenv("MAX_EQUITY_FRACTION", "0.90"))  # never go 100% - keep buffer
-MAX_NOTIONAL_PER_TRADE = float(os.getenv("MAX_NOTIONAL_PER_TRADE", "30000"))
-MIN_NOTIONAL_PER_TRADE = float(os.getenv("MIN_NOTIONAL_PER_TRADE", "50"))
+# ============================================
+# API CONFIGURATION
+# ============================================
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 
-# Timing
-DATA_REFRESH_MINUTES = int(os.getenv("DATA_REFRESH_MINUTES", "15"))
-DECISION_INTERVAL_HOURS = int(os.getenv("DECISION_INTERVAL_HOURS", "1"))
-LOOKBACK_HOURS = int(os.getenv("LOOKBACK_HOURS", "26280"))
-MODEL_RETRAIN_HOURS = int(os.getenv("MODEL_RETRAIN_HOURS", "24"))
-BOT_RUN_ONCE = os.getenv("BOT_RUN_ONCE", "false").lower() == "true"
+# ============================================
+# TRADING SYMBOLS (Start with just 1-2)
+# ============================================
+TRADE_SYMBOLS = ["BTC/USD", "ETH/USD"]  # Start with only these
 
-# Risk controls
-MAX_DRAWDOWN = float(os.getenv("MAX_DRAWDOWN", "0.10"))
-STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.015"))       # slightly wider - avoids getting shaken out
-TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "0.045"))
-MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.04"))
+# ============================================
+# RISK MANAGEMENT (CONSERVATIVE FOR PROFITABILITY)
+# ============================================
+MAX_POSITION_SIZE_PCT = 0.15  # Max 15% of portfolio per trade (reduced from 25%)
+MAX_TOTAL_EXPOSURE_PCT = 0.40  # Max 40% total deployed (reduced from unlimited)
+MAX_DAILY_LOSS_PCT = 0.05  # Stop trading after 5% daily loss
+MAX_DRAWDOWN = 0.15  # Max 15% drawdown before shutdown
 
-# Entry thresholds - FIXED: was too tight, almost nothing passed
-MIN_BUY_CONFIDENCE = float(os.getenv("MIN_BUY_CONFIDENCE", "0.42"))   # raised from 0.49 - needs real signal
-BASE_THRESHOLD = float(os.getenv("BASE_THRESHOLD", "0.42"))            # raised from 0.51
-MAX_THRESHOLD = float(os.getenv("MAX_THRESHOLD", "0.68"))              # raised from 0.65
+# ============================================
+# TRADE FILTERS (Quality over quantity)
+# ============================================
+MIN_CONFIDENCE_THRESHOLD = 0.65  # Increased from 0.30-0.50
+MIN_PROFIT_TARGET_PCT = 0.015  # 1.5% minimum expected profit (covers fees + spread)
+MAX_SPREAD_PCT = 0.002  # 0.2% max spread (avoid high-spread hours)
 
-# Probe entries (small test positions)
-ENABLE_PROBE_ENTRY = os.getenv("ENABLE_PROBE_ENTRY", "true").lower() == "true"
-PROBE_CONFIDENCE = float(os.getenv("PROBE_CONFIDENCE", "0.52"))
-PROBE_SIZE_MULTIPLIER = float(os.getenv("PROBE_SIZE_MULTIPLIER", "0.25"))
+# ============================================
+# TECHNICAL INDICATORS
+# ============================================
+LOOKBACK_HOURS = 168  # 7 days (increased from shorter periods)
+ML_TRAIN_MIN_ROWS = 200  # Minimum data for ML
 
-# ATR-based trailing stop - NEW
-ENABLE_TRAILING_STOP = os.getenv("ENABLE_TRAILING_STOP", "true").lower() == "true"
-ATR_WINDOW = int(os.getenv("ATR_WINDOW", "14"))
-ATR_STOP_MULTIPLIER = float(os.getenv("ATR_STOP_MULTIPLIER", "2.0"))   # trailing stop = 2x ATR below peak
-ATR_TP_MULTIPLIER = float(os.getenv("ATR_TP_MULTIPLIER", "5.0"))
+# ============================================
+# EXIT STRATEGY (Let winners run)
+# ============================================
+TRAILING_STOP_ACTIVATION_PCT = 0.02  # Start trailing after 2% profit
+TRAILING_STOP_DISTANCE_PCT = 0.01  # Trail by 1%
+MAX_HOLD_HOURS = 48  # Force exit after 48 hours
 
-# Backtest gate
-ENABLE_BACKTEST_GATE = os.getenv("ENABLE_BACKTEST_GATE", "false").lower() == "true"
-ML_TRAIN_MIN_ROWS = int(os.getenv("ML_TRAIN_MIN_ROWS", "5000"))         # lowered from 1300 - was blocking training too long
-BACKTEST_TEST_WINDOW = int(os.getenv("BACKTEST_TEST_WINDOW", "96"))
-BACKTEST_MIN_SIGNALS = int(os.getenv("BACKTEST_MIN_SIGNALS", "6"))
-BACKTEST_MIN_WINRATE = float(os.getenv("BACKTEST_MIN_WINRATE", "0.45"))
-
-# Logging
-TRADE_LOG_CSV = os.getenv("TRADE_LOG_CSV", "trade_journal.csv")
-GOOGLE_SHEETS_NAME = os.getenv("GOOGLE_SHEETS_NAME", "Trading Log")
-GOOGLE_CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+# ============================================
+# MEMORY & STATE
+# ============================================
+TRADE_LOG_CSV = "trade_log.csv"
+GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
+GOOGLE_SHEETS_NAME = "TradingBot"
