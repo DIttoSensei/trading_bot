@@ -1,4 +1,10 @@
 {
     "cooldowns": {},
-    "positions": {}
+    "positions": {
+        "BTC/USD": {
+            "entry_price": 62384.024,
+            "entry_time": "2026-06-07T11:02:05.984545+00:00",
+            "qty": 0.08015
+        }
+    }
 }
