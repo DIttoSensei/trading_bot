@@ -1,5 +1,11 @@
 import traceback
 import gspread
+from google.oauth2.service_account import Credentials
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
 HEADERS = [
     "timestamp", "symbol", "price", "action",
@@ -13,18 +19,16 @@ class GoogleSheetLogger:
     def __init__(self, credentials_file: str, sheet_name: str):
         self.sheet = None
         try:
-            # service_account() works in gspread 5.x AND 6.x
-            gc = gspread.service_account(filename=credentials_file)
+            creds = Credentials.from_service_account_file(credentials_file, scopes=SCOPES)
+            gc = gspread.authorize(creds)
             spreadsheet = gc.open(sheet_name)
             self.sheet = spreadsheet.sheet1
 
-            # Write headers if A1 is empty
-            first = self.sheet.acell("A1").value
-            if not first:
-                self.sheet.append_row(HEADERS, value_input_option="USER_ENTERED")
+            if not self.sheet.acell("A1").value:
+                self.sheet.append_row(HEADERS)
                 print("[SheetLogger] Headers written.")
 
-            print(f"[SheetLogger] Connected to '{sheet_name}' — id: {spreadsheet.id}")
+            print(f"[SheetLogger] Connected to '{sheet_name}'")
 
         except Exception as e:
             print(f"[SheetLogger] Init FAILED: {e}")
@@ -32,15 +36,15 @@ class GoogleSheetLogger:
 
     def log_row(self, row: list):
         if self.sheet is None:
-            print(f"[SheetLogger] DISABLED — row not saved: {row}")
+            print(f"[SheetLogger] DISABLED — row: {row}")
             return
         try:
-            result = self.sheet.append_row(
+            self.sheet.append_row(
                 [str(v) for v in row],
-                value_input_option="USER_ENTERED"
+                value_input_option="USER_ENTERED",
+                table_range="A1",
             )
-            updated = result.get("updates", {}).get("updatedRows", "?")
-            print(f"[SheetLogger] ✓ Logged {row[1]} {row[3]} — updatedRows={updated}")
+            print(f"[SheetLogger] ✓ Logged {row[1]} {row[3]}")
         except Exception as e:
             print(f"[SheetLogger] append_row FAILED: {e}")
             traceback.print_exc()
