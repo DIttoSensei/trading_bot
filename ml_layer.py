@@ -1,5 +1,4 @@
 import os
-import json
 import joblib
 import numpy as np
 import pandas as pd
@@ -9,7 +8,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 MODEL_PATH = "model.pkl"
-DATA_PATH = "training_data.json"
 
 
 class MLSpecialist:
@@ -17,7 +15,7 @@ class MLSpecialist:
         self.model = self._load_model()
 
     # -----------------------------
-    # Feature Engineering
+    # SAFE FEATURE ENGINEERING
     # -----------------------------
     def _build_features(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
@@ -28,25 +26,30 @@ class MLSpecialist:
 
         df["volatility_24h"] = df["return_4h"].rolling(24).std()
 
-        df["ma20"] = df["close"].rolling(20).mean()
-        df["ma50"] = df["close"].rolling(50).mean()
+        ma20 = df["close"].rolling(20).mean()
+        ma50 = df["close"].rolling(50).mean()
 
-        df["ma20_dist"] = (df["close"] - df["ma20"]) / df["ma20"]
-        df["ma50_dist"] = (df["close"] - df["ma50"]) / df["ma50"]
+        df["ma20_dist"] = (df["close"] - ma20) / ma20.replace(0, np.nan)
+        df["ma50_dist"] = (df["close"] - ma50) / ma50.replace(0, np.nan)
 
-        # RSI
+        # RSI SAFE
         delta = df["close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / (loss + 1e-9)
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        rs = gain / loss.replace(0, np.nan)
+
         df["rsi"] = 100 - (100 / (1 + rs))
 
         df["volume_change"] = df["volume"].pct_change()
 
-        return df.dropna()
+        # HARD CLEAN
+        df = df.replace([np.inf, -np.inf], np.nan)
+        df = df.dropna()
+
+        return df
 
     # -----------------------------
-    # Target Creation
+    # TARGET (FUTURE RETURN LABEL)
     # -----------------------------
     def _create_target(self, df: pd.DataFrame) -> pd.DataFrame:
         future_return = (df["close"].shift(-3) - df["close"]) / df["close"]
@@ -54,7 +57,7 @@ class MLSpecialist:
         return df.dropna()
 
     # -----------------------------
-    # Training
+    # TRAIN
     # -----------------------------
     def train_price_model(self, df: pd.DataFrame):
         if len(df) < 200:
@@ -89,20 +92,20 @@ class MLSpecialist:
         self._save_model()
 
     # -----------------------------
-    # Prediction
+    # PREDICT (SAFE)
     # -----------------------------
     def predict(self, feature_row: pd.Series) -> float:
         if self.model is None:
             return 0.5
 
         try:
-            X = feature_row.values.reshape(1, -1)
+            X = pd.DataFrame([feature_row.values])
             return float(self.model.predict_proba(X)[0][1])
         except:
             return 0.5
 
     # -----------------------------
-    # Persistence
+    # PERSISTENCE
     # -----------------------------
     def _save_model(self):
         try:
