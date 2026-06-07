@@ -118,25 +118,25 @@ class TradingBot:
     def compute_buy_qty(self, price: float, buying_power: float, equity: float, confidence: float, volatility: float) -> float:
         safe_vol = max(volatility, 0.0001)
         vol_scale = np.clip(0.015 / safe_vol, 0.6, 1.5)
-        
+
         base_thresh = getattr(config, "BASE_THRESHOLD", 0.58)
         conf_scale = np.clip((confidence - base_thresh) / 0.12, 0.4, 1.5)
-        
+
         pos_fraction = getattr(config, "POSITION_FRACTION", 0.15)
         min_fraction = getattr(config, "MIN_EQUITY_FRACTION", 0.05)
         max_fraction = getattr(config, "MAX_EQUITY_FRACTION", 0.25)
-        
+
         target_fraction = pos_fraction * vol_scale * conf_scale
         target_fraction = float(np.clip(target_fraction, min_fraction, max_fraction))
-        
+
         max_notional = getattr(config, "MAX_NOTIONAL_PER_TRADE", 5000.0)
         target_allocation = min(equity * target_fraction, max_notional)
         target_allocation = min(target_allocation, buying_power * 0.95)
-        
+
         min_notional = getattr(config, "MIN_NOTIONAL_PER_TRADE", 10.0)
         if target_allocation < min_notional:
             return 0.0
-            
+
         return round(max(target_allocation / price, 0.0), 5)
 
     def run_cycle(self):
@@ -152,17 +152,22 @@ class TradingBot:
         if self.day_start_equity is None:
             self.day_start_equity = equity
         daily_loss = max(0.0, (self.day_start_equity - equity) / self.day_start_equity)
-        
+
         now_ts = datetime.now(UTC).timestamp()
 
         for symbol in self.symbols:
             try:
                 df = self.fetch_data(symbol)
+                
+                # 🔍 TRACK 1: Print total row size returned from Alpaca API
+                print(f"📊 [TRACK 1] Ingested {symbol}: Total raw rows fetched = {len(df) if df is not None else 'None'}")
+
                 if df is None or len(df) < 30:
+                    print(f"⚠️ [DROP GATE A] {symbol} skipped. Insufficient historical data returned (< 30).")
                     continue
 
                 current_price = float(df.iloc[-1]["close"])
-                
+
                 # Check live exchange exposure directly to verify state consistency
                 broker_pos = self.broker.get_position_info(symbol)
                 current_qty = float(broker_pos.get("qty", 0.0))
@@ -171,6 +176,7 @@ class TradingBot:
                     del self.positions[symbol]
 
                 if now_ts < self.cooldowns.get(symbol, 0.0):
+                    print(f"ℹ️ {symbol} is currently in a defensive cooling phase. Skipping.")
                     continue
 
                 # --- 4-HOUR ALIGNED LOOKBACK MATRICES ---
@@ -178,17 +184,25 @@ class TradingBot:
                 d_feat["return_4h"] = d_feat["close"].pct_change(4)  # 4 rows * 1 hour = 4-hour window returns
                 d_feat["volatility_24h"] = d_feat["return_4h"].rolling(24).std() # Captures full day volatility trends
                 d_feat["ma_20_dist"] = (d_feat["close"] / d_feat["close"].rolling(20).mean()) - 1.0
+
+                # 🔍 TRACK 2: Total records before removing NaN calculation indices
+                print(f"📊 [TRACK 2] {symbol} allocation matrix row count before math dropna: {len(d_feat)}")
+
                 d_feat = d_feat.dropna()
-                
+
+                # 🔍 TRACK 3: Records surviving matrix validation
+                print(f"📊 [TRACK 3] {symbol} allocation matrix row count after math dropna: {len(d_feat)}")
+
                 if d_feat.empty:
+                    print(f"⚠️ [DROP GATE B] {symbol} skipped. Feature aggregation math left the DataFrame completely empty.")
                     continue
-                    
+
                 if symbol not in self.ml_models:
                     self.ml_models[symbol] = MLSpecialist()
-                
+
                 model = self.ml_models[symbol]
                 model.train_price_model(df)
-                
+
                 ml_prob = float(model.predict(d_feat.iloc[-1]))
                 tech_signal = float(technical_bot(df))
 
@@ -215,7 +229,7 @@ class TradingBot:
                 elif action == "BUY" and current_qty == 0:
                     current_portfolio = self.broker.get_all_positions()
                     allocated_capital = sum(float(p.qty) * float(p.current_price) for p in current_portfolio)
-                    
+
                     if allocated_capital >= (equity * config.MAX_TOTAL_EXPOSURE_PCT):
                         self._log(symbol, current_price, "OUT", confidence, tech_signal, ml_prob, current_qty, equity, drawdown, False, regime, threshold, "skip_max_exposure_limit")
                         continue
@@ -240,7 +254,7 @@ class TradingBot:
                             take_profit_price=tp_price,
                             stop_loss_price=sl_price
                         )
-                        
+
                         if order:
                             self.positions[symbol] = {
                                 "entry_price": current_price,
@@ -253,12 +267,12 @@ class TradingBot:
 
                 else:
                     self._log(symbol, current_price, "OUT", confidence, tech_signal, ml_prob, current_qty, equity, drawdown, False, regime, threshold, "waiting_for_entry")
-            
+
             except Exception as e:
                 print(f"❌ Error encountered inside loop execution footprint: {e}")
                 traceback.print_exc()
                 continue
-        
+
         self.save_bot_state()
 
 if __name__ == "__main__":
