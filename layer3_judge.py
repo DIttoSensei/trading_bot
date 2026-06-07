@@ -2,7 +2,7 @@ import pandas as pd
 
 
 class LLMJudge:
-    def evaluate(self, tech_signal: float, ml_prob: float, df: pd.DataFrame = None) -> dict:
+    def evaluate(self, tech_signal: float, ml_prob: float, df: pd.DataFrame = None):
 
         confidence = (ml_prob * 0.65) + (tech_signal * 0.35)
 
@@ -13,18 +13,14 @@ class LLMJudge:
         else:
             action = "HOLD"
 
-        # Market regime
         regime = "neutral"
+        volatility = 0.015
+
         try:
             ma20 = df["close"].rolling(20).mean().iloc[-1]
             ma50 = df["close"].rolling(50).mean().iloc[-1]
             regime = "bull_trend" if ma20 > ma50 else "bear_trend"
-        except:
-            pass
 
-        # volatility
-        volatility = 0.015
-        try:
             volatility = df["close"].pct_change().rolling(24).std().iloc[-1]
         except:
             pass
