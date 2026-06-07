@@ -10,7 +10,7 @@ class Broker:
     def get_account(self):
         return self.client.get_account()
 
-    def get_position_info(self, symbol: str) -> dict:
+    def get_position_info(self, symbol: str):
         try:
             pos = self.client.get_open_position(symbol)
             return {
@@ -23,9 +23,7 @@ class Broker:
     def get_all_positions(self):
         return self.client.get_all_positions()
 
-    def submit_order(self, symbol: str, side: str, qty: float,
-                      take_profit_price=None, stop_loss_price=None):
-
+    def submit_order(self, symbol: str, side: str, qty: float):
         try:
             order = MarketOrderRequest(
                 symbol=symbol,
@@ -33,9 +31,7 @@ class Broker:
                 side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
                 time_in_force=TimeInForce.GTC
             )
-
             return self.client.submit_order(order)
-
         except Exception as e:
             print("Order error:", e)
             return None
