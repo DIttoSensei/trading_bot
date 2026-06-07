@@ -24,9 +24,14 @@ class GoogleSheetLogger:
             spreadsheet = gc.open(sheet_name)
             self.sheet = spreadsheet.sheet1
 
-            if not self.sheet.acell("A1").value:
-                self.sheet.append_row(HEADERS)
+            # Check if cell A1 is empty
+            first_cell = self.sheet.acell("A1").value
+            if not first_cell or not str(first_cell).strip():
+                # v5 signature: values must be passed as the first positional argument
+                self.sheet.append_row(HEADERS, value_input_option="USER_ENTERED")
                 print("[SheetLogger] Headers written.")
+            else:
+                print(f"[SheetLogger] Existing headers verified: '{first_cell}'")
 
             print(f"[SheetLogger] Connected to '{sheet_name}'")
 
@@ -39,8 +44,10 @@ class GoogleSheetLogger:
             print(f"[SheetLogger] DISABLED — row: {row}")
             return
         try:
+            string_row = [str(v) for v in row]
+            # v5 signature: string_row is passed positionally as the first argument
             self.sheet.append_row(
-                [str(v) for v in row],
+                string_row,
                 value_input_option="USER_ENTERED",
                 table_range="A1",
             )
