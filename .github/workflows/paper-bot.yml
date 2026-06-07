@@ -41,10 +41,12 @@ jobs:
           GOOGLE_CREDENTIALS_FILE: "credentials.json"
         run: python main.py
 
-      - name: Test sheet connection
-        env:
-          GOOGLE_SHEETS_NAME: ${{ secrets.GOOGLE_SHEETS_NAME }}
+      - name: Run Sheet Test
         run: python test_sheet.py
+        env:
+          GOOGLE_SHEETS_NAME: "Trading Log"
+          GOOGLE_CREDENTIALS_FILE: "credentials.json"
+
 
       - name: Commit and Push Bot State
         run: |
