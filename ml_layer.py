@@ -6,6 +6,7 @@ Critical fixes:
   - All division uses .replace(0, np.nan) → no inf
   - Final dropna() on FEATURES columns guaranteed
   - Per-symbol model file
+  - Separated training-set alignment from live-prediction feature scaling
 """
 import os
 import joblib
@@ -29,6 +30,7 @@ class MLSpecialist:
         self.model = self._load()
 
     def _build_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculates indicators across the raw timeline without dropping missing rows yet."""
         df = df.copy().reset_index(drop=True)
 
         df["return_4h"]  = df["close"].pct_change(4)
@@ -50,32 +52,36 @@ class MLSpecialist:
         df["vol_chg"] = df["volume"].pct_change()
 
         df = df.replace([np.inf, -np.inf], np.nan)
-        df = df.dropna(subset=FEATURES).reset_index(drop=True)
         return df
 
-    def _build_target(self, df: pd.DataFrame) -> pd.DataFrame:
-        future = (df["close"].shift(-4) - df["close"]) / df["close"].replace(0, np.nan)
-        df["target"] = (future > 0).astype(int)
-        return df.dropna(subset=["target"]).reset_index(drop=True)
-
     def train(self, df: pd.DataFrame) -> bool:
+        """Combines features and targets, drops edge columns, and fits the pipeline."""
         if len(df) < 200:
             print(f"[ML:{self.symbol}] Too few rows ({len(df)}), skip train.")
             return False
 
-        df = self._build_features(df)
-        df = self._build_target(df)
+        # 1. Build indicators across the whole series
+        df_base = self._build_features(df)
+        
+        # 2. Add the clean target vector looking exactly 4 hours ahead
+        future = (df_base["close"].shift(-4) - df_base["close"]) / df_base["close"].replace(0, np.nan)
+        df_base["target"] = (future > 0).astype(int)
 
-        if len(df) < 50:
-            print(f"[ML:{self.symbol}] Too few clean rows, skip train.")
+        # 3. Safely drop empty boundary rows exclusively for the training set
+        df_train = df_base.dropna(subset=FEATURES + ["target"]).reset_index(drop=True)
+
+        if len(df_train) < 50:
+            print(f"[ML:{self.symbol}] Too few clean training rows, skip train.")
             return False
 
-        X = df[FEATURES]
-        y = df["target"]
+        X = df_train[FEATURES]
+        y = df_train["target"]
 
+        # Re-fitting pipeline with higher regularization parameter C for more variance
         self.model = Pipeline([
             ("scaler", StandardScaler()),
             ("clf", LogisticRegression(
+                C=10.0,
                 max_iter=1000,
                 class_weight="balanced",
                 random_state=42,
@@ -87,14 +93,15 @@ class MLSpecialist:
         return True
 
     def get_latest_features(self, df: pd.DataFrame):
-        """Returns single-row DataFrame with FEATURES columns, or None."""
-        df = self._build_features(df)
-        if df.empty:
+        """Extracts the single most recent row with clean features for live execution."""
+        df_base = self._build_features(df)
+        df_clean = df_base.dropna(subset=FEATURES)
+        if df_clean.empty:
             return None
-        return df[FEATURES].iloc[[-1]]  # DataFrame, not numpy — preserves feature names
+        return df_clean[FEATURES].iloc[[-1]]
 
     def predict(self, X) -> float:
-        """Returns float 0.0–1.0. Neutral 0.5 on any failure."""
+        """Returns directional probability scalar bounded cleanly from 0.0 to 1.0."""
         if self.model is None or X is None:
             return 0.5
         try:
