@@ -47,7 +47,7 @@ class TradingBot:
                 with open(self.state_path) as f:
                     data = json.load(f)
                     self.positions = data.get("positions", {})
-                print(f"[State] Loaded positions: {self.positions}")
+                print(f"[State] Loaded positions: {list(self.positions.keys()) or 'none'}")
             except Exception as e:
                 print(f"[State] Load failed: {e}")
 
@@ -59,25 +59,20 @@ class TradingBot:
             print(f"[State] Save failed: {e}")
 
     def _sync_positions_from_broker(self):
-        """
-        Sync self.positions from actual Alpaca positions.
-        Prevents ghost positions after GitHub Actions cache miss.
-        """
+        """Sync open positions from Alpaca — never trust stale cache alone."""
         try:
-            live = self.broker.client.get_all_positions()
+            live = self.broker.get_all_positions()
             synced = {}
             for p in live:
-                # Alpaca returns symbol as BTCUSD — map back to BTC/USD
                 raw = p.symbol  # e.g. "BTCUSD"
-                # find matching config symbol
                 for s in self.symbols:
                     if s.replace("/", "") == raw:
                         synced[s] = float(p.avg_entry_price)
                         break
             self.positions = synced
-            print(f"[State] Synced from broker: {self.positions}")
+            print(f"[State] Broker sync: {list(self.positions.keys()) or 'no open positions'}")
         except Exception as e:
-            print(f"[State] Broker sync failed (using cached state): {e}")
+            print(f"[State] Broker sync failed, using cached state: {e}")
 
     # ------------------------------------------------------------------ data
     def fetch_data(self, symbol: str):
@@ -93,7 +88,7 @@ class TradingBot:
             df = self.data_client.get_crypto_bars(req).df.reset_index()
             df = df[["timestamp", "open", "high", "low", "close", "volume"]]
             if len(df) < 100:
-                print(f"[{symbol}] Only {len(df)} rows, need 100+")
+                print(f"[{symbol}] Only {len(df)} rows, need 100+, skip.")
                 return None
             return df
         except Exception as e:
@@ -104,10 +99,18 @@ class TradingBot:
     def _log(self, symbol, price, action, conf, tech, ml_prob, qty, equity, dd, regime, note="ok"):
         row = [
             datetime.now(UTC).isoformat(),
-            symbol, round(float(price), 4), action,
-            round(float(conf), 4), round(float(tech), 4), round(float(ml_prob), 4),
-            round(float(qty), 8), round(float(equity), 2), round(float(dd), 6),
-            regime, config.BASE_THRESHOLD, note,
+            symbol,
+            round(float(price), 4),
+            action,
+            round(float(conf), 4),
+            round(float(tech), 4),
+            round(float(ml_prob), 4),
+            round(float(qty), 8),
+            round(float(equity), 2),
+            round(float(dd), 6),
+            regime,
+            config.BASE_THRESHOLD,
+            note,
         ]
         self.logger.log_row(row)
 
@@ -121,7 +124,6 @@ class TradingBot:
         dd     = self.risk.update(equity)
         print(f"Equity: ${equity:,.2f}  |  Drawdown: {dd:.2%}")
 
-        # Always sync positions from broker — never trust stale cache alone
         self._sync_positions_from_broker()
 
         for symbol in self.symbols:
@@ -132,6 +134,7 @@ class TradingBot:
                 traceback.print_exc()
 
         self._save_state()
+        print("Cycle complete.")
 
     def _run_symbol(self, symbol: str, equity: float, dd: float):
         df = self.fetch_data(symbol)
@@ -140,47 +143,40 @@ class TradingBot:
 
         price = float(df["close"].iloc[-1])
 
-        # Train
         self.ml[symbol].train(df)
-
-        # Predict
-        features = self.ml[symbol].get_latest_features(df)
-        ml_prob  = self.ml[symbol].predict(features)
-
-        # Tech signal
+        features    = self.ml[symbol].get_latest_features(df)
+        ml_prob     = self.ml[symbol].predict(features)
         tech_signal = self._tech_signal(df)
 
-        # Decision
         decision   = self.judge.evaluate(tech_signal, ml_prob, df)
         action     = decision["action"]
         conf       = decision["confidence"]
         regime     = decision["regime"]
-        volatility = decision["volatility"]
 
         has_position = symbol in self.positions
 
         print(
             f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} tech={tech_signal:.3f} "
-            f"conf={conf:.3f} | {action} | position={'YES' if has_position else 'NO'}"
+            f"conf={conf:.3f} | signal={action} | holding={'YES' if has_position else 'NO'}"
         )
 
-        # Risk gate
         if not self.risk.allow_trading(equity):
-            self._log(symbol, price, "BLOCKED", conf, tech_signal, ml_prob, 0, equity, dd, regime, "max_drawdown")
+            self._log(symbol, price, "BLOCKED", conf, tech_signal, ml_prob,
+                      0, equity, dd, regime, "max_drawdown")
             return
 
-        qty = 0.0
+        qty          = 0.0
+        final_action = "HOLD"
 
         if action == "BUY" and not has_position:
-            qty = self.risk.position_size(equity, price)  # uses equity fraction
+            qty = self.risk.position_size(equity, price)
             if qty * price < config.MIN_NOTIONAL_PER_TRADE:
-                print(f"[{symbol}] Order too small (${qty * price:.2f}), skipping.")
-                self._log(symbol, price, "SKIP", conf, tech_signal, ml_prob, 0, equity, dd, regime, "below_min_notional")
+                print(f"[{symbol}] Notional ${qty*price:.2f} below minimum, skip.")
                 return
             order = self.broker.submit_order(symbol, "buy", qty)
             if order:
                 self.positions[symbol] = price
-                self._log(symbol, price, "BUY", conf, tech_signal, ml_prob, qty, equity, dd, regime)
+                final_action = "BUY"
 
         elif action == "SELL" and has_position:
             order = self.broker.close_position(symbol)
@@ -188,11 +184,17 @@ class TradingBot:
                 entry = self.positions.pop(symbol)
                 pnl_pct = (price - entry) / entry
                 print(f"[{symbol}] Closed. PnL: {pnl_pct:+.2%}")
-                self._log(symbol, price, "SELL", conf, tech_signal, ml_prob, 0, equity, dd, regime, f"pnl={pnl_pct:.4f}")
+                final_action = "SELL"
 
-        else:
-            # HOLD or action blocked by position state
-            self._log(symbol, price, action, conf, tech_signal, ml_prob, qty, equity, dd, regime)
+        elif action == "BUY" and has_position:
+            final_action = "HOLD_LONG"
+
+        elif action == "SELL" and not has_position:
+            final_action = "HOLD_FLAT"
+
+        # Log every cycle so you can see what the bot is thinking
+        self._log(symbol, price, final_action, conf, tech_signal, ml_prob,
+                  qty, equity, dd, regime)
 
     # ------------------------------------------------------------------ tech
     def _tech_signal(self, df: pd.DataFrame) -> float:
