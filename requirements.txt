@@ -1,22 +1,10 @@
-# Broker & Data
-alpaca-py
-pandas
-numpy
-pandas-ta
-
-# Layer 2: ML Specialist
-xgboost
-scikit-learn
-
-# Layer 3: The Judge & Logging
-python-dotenv
-gspread
-google-auth
-
 alpaca-py>=0.29.0
 scikit-learn>=1.4.0
 pandas>=2.0.0
 numpy>=1.26.0
 joblib>=1.3.0
-gspread>=6.0.0
+gspread==5.12.4
 google-auth>=2.0.0
+pandas-ta>=0.3.14b
+xgboost>=2.0.0
+python-dotenv>=1.0.0
