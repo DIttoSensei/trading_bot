@@ -100,9 +100,16 @@ class TradingBot:
             ]
             with open(self.journal_path, "a", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(row)
+            
+            # 📡 EXPLICIT API TRACKING GATEWAY
+            print(f"📡 [SHEET API] Attempting live network upload to Google Sheets for {symbol}...")
             self.sheet_logger.log_row(row)
+            print(f"🚀 [SHEET API] Success! Row cleanly verified on Google Sheets cloud for {symbol}.")
+
         except Exception as e:
-            print(f"❌ Logging Failure: {e}")
+            # 📢 This stops the silent dropping and forces the terminal to show the real error
+            print(f"❌ GOOGLE API CONNECTION FAILURE for {symbol}: {str(e)}")
+            traceback.print_exc()
 
     def fetch_data(self, symbol: str) -> pd.DataFrame | None:
         try:
@@ -201,11 +208,18 @@ class TradingBot:
                     self.ml_models[symbol] = MLSpecialist()
 
                 model = self.ml_models[symbol]
+                
+                # 🔍 TRACK 4: Check if model training is stalling the CPU
+                print(f"🧠 [TRACK 4] {symbol} starting model training sequence...")
                 model.train_price_model(df)
-
+                
+                # 🔍 TRACK 5: Check if inference finishes smoothly
+                print(f"🧠 [TRACK 5] {symbol} model training complete. Running prediction model...")
                 ml_prob = float(model.predict(d_feat.iloc[-1]))
                 tech_signal = float(technical_bot(df))
 
+                # 🔍 TRACK 6: Check if the external LLM Judge layer is responding
+                print(f"⚖️ [TRACK 6] {symbol} metrics ready (ML: {ml_prob}, Tech: {tech_signal}). Handing off to LLM Judge...")
                 try:
                     decision = self.judge.evaluate(tech_signal, ml_prob, df)
                 except TypeError:
