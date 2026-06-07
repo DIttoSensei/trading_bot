@@ -41,6 +41,11 @@ jobs:
           GOOGLE_CREDENTIALS_FILE: "credentials.json"
         run: python main.py
 
+      - name: Test sheet connection
+        env:
+          GOOGLE_SHEETS_NAME: ${{ secrets.GOOGLE_SHEETS_NAME }}
+        run: python test_sheet.py
+
       - name: Commit and Push Bot State
         run: |
           git config --global user.name "GitHub Actions Bot"
