@@ -24,14 +24,13 @@ class GoogleSheetLogger:
             spreadsheet = gc.open(sheet_name)
             self.sheet = spreadsheet.sheet1
 
-            # Fetch the actual populated content array of row 1
+            # Check if row 1 has any data present
             first_row = self.sheet.row_values(1)
             
-            # If the list is completely empty or row 1 column 1 has no text content
             if not first_row or not str(first_row[0]).strip():
-                # v5 positional signature for appending headers
-                self.sheet.append_row(HEADERS, value_input_option="USER_ENTERED")
-                print("[SheetLogger] Headers written.")
+                # v5 signature: values passed as a nested list matching the coordinate matrix dimensions
+                self.sheet.update("A1:M1", [HEADERS])
+                print("[SheetLogger] Headers explicitly locked to row 1.")
             else:
                 print(f"[SheetLogger] Existing headers verified: '{first_row[0]}'")
 
