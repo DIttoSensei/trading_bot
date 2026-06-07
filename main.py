@@ -1,13 +1,3 @@
-"""
-main.py — integration layer.
-Fixes vs previous broken version:
-  - Broker.submit_order() called with (symbol, side, qty) only
-  - SELL uses broker.close_position() — not submit_order
-  - ML returns DataFrame features — no sklearn warning
-  - Sheet logging is append-only via sheet_logger.log_row()
-  - Per-symbol exceptions never crash the whole loop
-  - Position sizing uses risk.position_size()
-"""
 import os
 import json
 import traceback
@@ -35,10 +25,9 @@ class TradingBot:
         self.broker = Broker(
             config.ALPACA_API_KEY,
             config.ALPACA_SECRET_KEY,
-            paper=True,  # set False for live
+            paper=True,
         )
         self.data_client = CryptoHistoricalDataClient()
-
         self.ml = {s: MLSpecialist(s) for s in self.symbols}
         self.judge = LLMJudge()
         self.risk = RiskManager(config.MAX_DRAWDOWN)
@@ -48,7 +37,7 @@ class TradingBot:
         )
 
         self.state_path = "bot_state.json"
-        self.positions = {}   # symbol → entry_price
+        self.positions = {}
         self._load_state()
 
     # ------------------------------------------------------------------ state
@@ -58,8 +47,9 @@ class TradingBot:
                 with open(self.state_path) as f:
                     data = json.load(f)
                     self.positions = data.get("positions", {})
-            except Exception:
-                pass
+                print(f"[State] Loaded positions: {self.positions}")
+            except Exception as e:
+                print(f"[State] Load failed: {e}")
 
     def _save_state(self):
         try:
@@ -68,8 +58,29 @@ class TradingBot:
         except Exception as e:
             print(f"[State] Save failed: {e}")
 
+    def _sync_positions_from_broker(self):
+        """
+        Sync self.positions from actual Alpaca positions.
+        Prevents ghost positions after GitHub Actions cache miss.
+        """
+        try:
+            live = self.broker.client.get_all_positions()
+            synced = {}
+            for p in live:
+                # Alpaca returns symbol as BTCUSD — map back to BTC/USD
+                raw = p.symbol  # e.g. "BTCUSD"
+                # find matching config symbol
+                for s in self.symbols:
+                    if s.replace("/", "") == raw:
+                        synced[s] = float(p.avg_entry_price)
+                        break
+            self.positions = synced
+            print(f"[State] Synced from broker: {self.positions}")
+        except Exception as e:
+            print(f"[State] Broker sync failed (using cached state): {e}")
+
     # ------------------------------------------------------------------ data
-    def fetch_data(self, symbol: str) -> pd.DataFrame | None:
+    def fetch_data(self, symbol: str):
         try:
             end   = datetime.now(UTC)
             start = end - timedelta(hours=config.LOOKBACK_HOURS)
@@ -81,23 +92,26 @@ class TradingBot:
             )
             df = self.data_client.get_crypto_bars(req).df.reset_index()
             df = df[["timestamp", "open", "high", "low", "close", "volume"]]
-            return df if len(df) >= 100 else None
+            if len(df) < 100:
+                print(f"[{symbol}] Only {len(df)} rows, need 100+")
+                return None
+            return df
         except Exception as e:
-            print(f"[Data] fetch failed for {symbol}: {e}")
+            print(f"[Data] fetch failed {symbol}: {e}")
             return None
 
     # ------------------------------------------------------------------ log
     def _log(self, symbol, price, action, conf, tech, ml_prob, qty, equity, dd, regime, note="ok"):
         row = [
             datetime.now(UTC).isoformat(),
-            symbol, price, action,
-            round(conf, 4), round(tech, 4), round(ml_prob, 4),
-            qty, round(equity, 2), round(dd, 4),
+            symbol, round(float(price), 4), action,
+            round(float(conf), 4), round(float(tech), 4), round(float(ml_prob), 4),
+            round(float(qty), 8), round(float(equity), 2), round(float(dd), 6),
             regime, config.BASE_THRESHOLD, note,
         ]
         self.logger.log_row(row)
 
-    # ------------------------------------------------------------------ main
+    # ------------------------------------------------------------------ run
     def run_cycle(self):
         print(f"\n{'='*50}")
         print(f"RUN {datetime.now(UTC).isoformat()}")
@@ -105,90 +119,92 @@ class TradingBot:
         acc    = self.broker.get_account()
         equity = float(acc.equity)
         dd     = self.risk.update(equity)
-
         print(f"Equity: ${equity:,.2f}  |  Drawdown: {dd:.2%}")
+
+        # Always sync positions from broker — never trust stale cache alone
+        self._sync_positions_from_broker()
 
         for symbol in self.symbols:
             try:
                 self._run_symbol(symbol, equity, dd)
             except Exception as e:
-                print(f"[{symbol}] UNHANDLED ERROR: {e}")
+                print(f"[{symbol}] UNHANDLED: {e}")
                 traceback.print_exc()
 
         self._save_state()
 
     def _run_symbol(self, symbol: str, equity: float, dd: float):
-        # 1. Fetch data
         df = self.fetch_data(symbol)
         if df is None:
-            print(f"[{symbol}] Insufficient data, skip.")
             return
 
         price = float(df["close"].iloc[-1])
 
-        # 2. Train ML (retrain every run — stateless env)
+        # Train
         self.ml[symbol].train(df)
 
-        # 3. Get ML probability
+        # Predict
         features = self.ml[symbol].get_latest_features(df)
         ml_prob  = self.ml[symbol].predict(features)
 
-        # 4. Technical signal = RSI-based simple signal
+        # Tech signal
         tech_signal = self._tech_signal(df)
 
-        # 5. Decision
+        # Decision
         decision   = self.judge.evaluate(tech_signal, ml_prob, df)
         action     = decision["action"]
         conf       = decision["confidence"]
         regime     = decision["regime"]
         volatility = decision["volatility"]
 
-        print(f"[{symbol}] price={price:.2f}  ml={ml_prob:.3f}  tech={tech_signal:.3f}  conf={conf:.3f}  → {action}")
+        has_position = symbol in self.positions
 
-        # 6. Risk gate
+        print(
+            f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} tech={tech_signal:.3f} "
+            f"conf={conf:.3f} | {action} | position={'YES' if has_position else 'NO'}"
+        )
+
+        # Risk gate
         if not self.risk.allow_trading(equity):
             self._log(symbol, price, "BLOCKED", conf, tech_signal, ml_prob, 0, equity, dd, regime, "max_drawdown")
             return
 
         qty = 0.0
 
-        # 7. Execute
-        if action == "BUY" and symbol not in self.positions:
-            qty = self.risk.position_size(equity, price, volatility)
+        if action == "BUY" and not has_position:
+            qty = self.risk.position_size(equity, price)  # uses equity fraction
             if qty * price < config.MIN_NOTIONAL_PER_TRADE:
-                self._log(symbol, price, "SKIP_BUY", conf, tech_signal, ml_prob, 0, equity, dd, regime, "below_min_notional")
+                print(f"[{symbol}] Order too small (${qty * price:.2f}), skipping.")
+                self._log(symbol, price, "SKIP", conf, tech_signal, ml_prob, 0, equity, dd, regime, "below_min_notional")
                 return
             order = self.broker.submit_order(symbol, "buy", qty)
             if order:
                 self.positions[symbol] = price
+                self._log(symbol, price, "BUY", conf, tech_signal, ml_prob, qty, equity, dd, regime)
 
-        elif action == "SELL" and symbol in self.positions:
+        elif action == "SELL" and has_position:
             order = self.broker.close_position(symbol)
             if order:
                 entry = self.positions.pop(symbol)
                 pnl_pct = (price - entry) / entry
-                print(f"[{symbol}] Closed position. PnL: {pnl_pct:.2%}")
+                print(f"[{symbol}] Closed. PnL: {pnl_pct:+.2%}")
+                self._log(symbol, price, "SELL", conf, tech_signal, ml_prob, 0, equity, dd, regime, f"pnl={pnl_pct:.4f}")
 
-        # 8. Log
-        self._log(symbol, price, action, conf, tech_signal, ml_prob, qty, equity, dd, regime)
+        else:
+            # HOLD or action blocked by position state
+            self._log(symbol, price, action, conf, tech_signal, ml_prob, qty, equity, dd, regime)
 
     # ------------------------------------------------------------------ tech
     def _tech_signal(self, df: pd.DataFrame) -> float:
-        """
-        Simple RSI-based technical signal normalised to 0–1.
-        RSI < 30 → oversold → bullish (signal near 1.0)
-        RSI > 70 → overbought → bearish (signal near 0.0)
-        """
         try:
             delta = df["close"].diff()
             gain  = delta.clip(lower=0).rolling(14).mean()
             loss  = (-delta.clip(upper=0)).rolling(14).mean()
             rs    = gain / loss.replace(0, np.nan)
-            rsi   = 100 - (100 / (1 + rs))
-            rsi_val = float(rsi.iloc[-1])
-            if np.isnan(rsi_val):
+            rsi   = float((100 - (100 / (1 + rs))).iloc[-1])
+            if np.isnan(rsi):
                 return 0.5
-            return float(np.clip(1.0 - (rsi_val / 100.0), 0.0, 1.0))
+            return float(np.clip(1.0 - (rsi / 100.0), 0.0, 1.0))
         except Exception:
             return 0.5
 
