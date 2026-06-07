@@ -13,5 +13,4 @@ class RiskManager:
         return (self.peak_equity - equity) / self.peak_equity
 
     def allow_trading(self, equity: float) -> bool:
-        dd = self.update(equity)
-        return dd < self.max_drawdown
+        return self.update(equity) < self.max_drawdown
