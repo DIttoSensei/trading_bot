@@ -1,7 +1,3 @@
-"""
-broker.py — uses alpaca-py (NOT legacy alpaca-trade-api)
-pip install alpaca-py
-"""
 import traceback
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -15,8 +11,14 @@ class Broker:
     def get_account(self):
         return self.client.get_account()
 
+    def get_all_positions(self):
+        try:
+            return self.client.get_all_positions()
+        except Exception as e:
+            print(f"[Broker] get_all_positions failed: {e}")
+            return []
+
     def submit_order(self, symbol: str, side: str, qty: float):
-        """BUY only. SELL uses close_position instead."""
         try:
             req = MarketOrderRequest(
                 symbol=symbol,
@@ -25,7 +27,7 @@ class Broker:
                 time_in_force=TimeInForce.GTC,
             )
             order = self.client.submit_order(order_data=req)
-            print(f"[Broker] {side.upper()} {qty} {symbol} → {order.id}")
+            print(f"[Broker] {side.upper()} {qty} {symbol} → order {order.id}")
             return order
         except Exception as e:
             print(f"[Broker] submit_order FAILED {symbol}: {e}")
@@ -33,18 +35,10 @@ class Broker:
             return None
 
     def close_position(self, symbol: str):
-        """Close entire open position. Silently skips if no position exists."""
         try:
             order = self.client.close_position(symbol)
             print(f"[Broker] Closed position {symbol}")
             return order
         except Exception as e:
             print(f"[Broker] close_position skipped {symbol}: {e}")
-            return None
-
-    def get_open_position(self, symbol: str):
-        """symbol must be asset format: BTCUSD not BTC/USD"""
-        try:
-            return self.client.get_open_position(symbol.replace("/", ""))
-        except Exception:
             return None
