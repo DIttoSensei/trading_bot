@@ -1,14 +1,6 @@
-"""
-sheet_logger.py
-Append-only Google Sheets logger.
-NO update_row. NO row indexing. Single append per trade.
-
-Setup:
-  pip install gspread google-auth
-  credentials.json = service account key from Google Cloud Console
-  Share the sheet with the service account email.
-"""
 import traceback
+import json
+import os
 
 try:
     import gspread
@@ -16,12 +8,18 @@ try:
     GSPREAD_AVAILABLE = True
 except ImportError:
     GSPREAD_AVAILABLE = False
-    print("[SheetLogger] gspread not installed — sheet logging disabled.")
-
+    print("[SheetLogger] gspread not installed — logging disabled.")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
+]
+
+HEADERS = [
+    "timestamp", "symbol", "price", "action",
+    "confidence", "tech_signal", "ml_prob",
+    "qty", "equity", "drawdown",
+    "regime", "threshold", "note"
 ]
 
 
@@ -32,26 +30,32 @@ class GoogleSheetLogger:
             return
         try:
             creds = Credentials.from_service_account_file(credentials_file, scopes=SCOPES)
-            client = gspread.authorize(creds)
+            # Use gspread.Client directly — gspread.authorize() is deprecated
+            client = gspread.Client(auth=creds)
+            client.session = None  # forces fresh session
             spreadsheet = client.open(sheet_name)
             self.sheet = spreadsheet.sheet1
+
+            # Write headers if sheet is empty
+            if self.sheet.row_count == 0 or not self.sheet.get("A1"):
+                self.sheet.append_row(HEADERS, value_input_option="USER_ENTERED")
+
             print(f"[SheetLogger] Connected to '{sheet_name}'")
         except Exception as e:
-            print(f"[SheetLogger] Init failed (sheet logging disabled): {e}")
+            print(f"[SheetLogger] Init FAILED: {e}")
+            traceback.print_exc()
             self.sheet = None
 
     def log_row(self, row: list):
-        """
-        Append a single row. Silently skips if sheet unavailable.
-        row = [timestamp, symbol, price, action, confidence,
-               tech_signal, ml_prob, qty, equity, drawdown,
-               regime, threshold, note]
-        """
         if self.sheet is None:
-            print(f"[SheetLogger] (no sheet) {row}")
+            print(f"[SheetLogger] (disabled) row={row}")
             return
         try:
-            self.sheet.append_row(row, value_input_option="USER_ENTERED")
+            self.sheet.append_row(
+                [str(v) for v in row],
+                value_input_option="USER_ENTERED"
+            )
+            print(f"[SheetLogger] Logged: {row[1]} {row[3]}")
         except Exception as e:
-            print(f"[SheetLogger] append_row failed: {e}")
+            print(f"[SheetLogger] append_row FAILED: {e}")
             traceback.print_exc()
