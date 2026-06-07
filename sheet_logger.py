@@ -25,7 +25,6 @@ class GoogleSheetLogger:
 
         sheet = client.open(sheet_name)
         self.worksheet = sheet.sheet1
-
         self.enabled = True
 
     def log_row(self, row):
@@ -34,4 +33,4 @@ class GoogleSheetLogger:
 
         self.worksheet.append_row(row, value_input_option="USER_ENTERED")
         time.sleep(0.3)
-        return len(self.worksheet.get_all_values())
+        return True
