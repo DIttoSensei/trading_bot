@@ -1,14 +1,6 @@
 import traceback
-import json
-import os
-
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-    GSPREAD_AVAILABLE = True
-except ImportError:
-    GSPREAD_AVAILABLE = False
-    print("[SheetLogger] gspread not installed — logging disabled.")
+from google.oauth2.service_account import Credentials
+import gspread
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -26,36 +18,33 @@ HEADERS = [
 class GoogleSheetLogger:
     def __init__(self, credentials_file: str, sheet_name: str):
         self.sheet = None
-        if not GSPREAD_AVAILABLE:
-            return
         try:
             creds = Credentials.from_service_account_file(credentials_file, scopes=SCOPES)
-            # Use gspread.Client directly — gspread.authorize() is deprecated
-            client = gspread.Client(auth=creds)
-            client.session = None  # forces fresh session
-            spreadsheet = client.open(sheet_name)
+            gc = gspread.authorize(creds)
+            spreadsheet = gc.open(sheet_name)
             self.sheet = spreadsheet.sheet1
 
-            # Write headers if sheet is empty
-            if self.sheet.row_count == 0 or not self.sheet.get("A1"):
+            first = self.sheet.acell("A1").value
+            if not first:
                 self.sheet.append_row(HEADERS, value_input_option="USER_ENTERED")
+                print("[SheetLogger] Headers written.")
 
-            print(f"[SheetLogger] Connected to '{sheet_name}'")
+            print(f"[SheetLogger] Connected to '{sheet_name}' — id: {spreadsheet.id}")
         except Exception as e:
             print(f"[SheetLogger] Init FAILED: {e}")
             traceback.print_exc()
-            self.sheet = None
 
     def log_row(self, row: list):
         if self.sheet is None:
-            print(f"[SheetLogger] (disabled) row={row}")
+            print(f"[SheetLogger] DISABLED — row: {row}")
             return
         try:
-            self.sheet.append_row(
+            result = self.sheet.append_row(
                 [str(v) for v in row],
                 value_input_option="USER_ENTERED"
             )
-            print(f"[SheetLogger] Logged: {row[1]} {row[3]}")
+            updated = result.get("updates", {}).get("updatedRows", "?")
+            print(f"[SheetLogger] ✓ Logged {row[1]} {row[3]} — updatedRows={updated}")
         except Exception as e:
             print(f"[SheetLogger] append_row FAILED: {e}")
             traceback.print_exc()
