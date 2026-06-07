@@ -12,3 +12,11 @@ scikit-learn
 python-dotenv
 gspread
 google-auth
+
+alpaca-py>=0.29.0
+scikit-learn>=1.4.0
+pandas>=2.0.0
+numpy>=1.26.0
+joblib>=1.3.0
+gspread>=6.0.0
+google-auth>=2.0.0
