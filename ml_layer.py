@@ -54,7 +54,7 @@ class MLSpecialist:
         return df
 
     def _build_target(self, df: pd.DataFrame) -> pd.DataFrame:
-        future = (df["close"].shift(-3) - df["close"]) / df["close"].replace(0, np.nan)
+        future = (df["close"].shift(-4) - df["close"]) / df["close"].replace(0, np.nan)
         df["target"] = (future > 0).astype(int)
         return df.dropna(subset=["target"]).reset_index(drop=True)
 
