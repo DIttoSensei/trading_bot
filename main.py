@@ -59,14 +59,18 @@ class TradingBot:
             print(f"[State] Save failed: {e}")
 
     def _sync_positions_from_broker(self):
-        """Sync open positions from Alpaca — never trust stale cache alone."""
+        """Sync open positions from Alpaca — cleaned string tracking fix applied."""
         try:
             live = self.broker.get_all_positions()
             synced = {}
             for p in live:
-                raw = p.symbol  # e.g. "BTCUSD"
+                # Force clean the broker's symbol string
+                raw = p.symbol.replace("/", "").strip().upper()
                 for s in self.symbols:
-                    if s.replace("/", "") == raw:
+                    # Force clean your config's symbol string
+                    clean_config = s.replace("/", "").strip().upper()
+                    
+                    if clean_config == raw:
                         synced[s] = float(p.avg_entry_price)
                         break
             self.positions = synced
@@ -119,7 +123,7 @@ class TradingBot:
         print(f"\n{'='*50}")
         print(f"RUN {datetime.now(UTC).isoformat()}")
 
-        acc    = self.broker.get_account()
+        acc = self.broker.get_account()
         equity = float(acc.equity)
         dd     = self.risk.update(equity)
         print(f"Equity: ${equity:,.2f}  |  Drawdown: {dd:.2%}")
