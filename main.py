@@ -161,22 +161,26 @@ class TradingBot:
         final_action = "HOLD"
         qty          = 0.0
 
-        # ------------------------------------------------ HARD CODED RULES FIX
+        # ------------------------------------------------ ADJUSTABLE EXITS
         if has_position:
             entry_price = self.positions[symbol]
             current_pnl = (price - entry_price) / entry_price
 
-            # FORCE TAKE PROFIT (e.g., 5% gains)
-            if current_pnl >= 0.05:
+            # Change these percentages to whatever you want for your assets
+            TAKE_PROFIT_TARGET = 0.05  # e.g., 5% profit target
+            STOP_LOSS_TARGET   = -0.03 # e.g., -3% stop loss protection
+
+            # FORCE TAKE PROFIT
+            if current_pnl >= TAKE_PROFIT_TARGET:
                 action = "SELL"
                 conf = 1.0
-                print(f"[{symbol}] HARD PROFIT TARGET HIT: {current_pnl:+.2%}. Forcing Sell.")
+                print(f"[{symbol}] ADJUSTABLE PROFIT TARGET HIT: {current_pnl:+.2%}. Forcing Sell.")
             
-            # FORCE STOP LOSS (e.g., 3% loss protection)
-            elif current_pnl <= -0.03:
+            # FORCE STOP LOSS
+            elif current_pnl <= STOP_LOSS_TARGET:
                 action = "SELL"
                 conf = 1.0
-                print(f"[{symbol}] HARD STOP LOSS HIT: {current_pnl:+.2%}. Forcing Sell.")
+                print(f"[{symbol}] ADJUSTABLE STOP LOSS HIT: {current_pnl:+.2%}. Forcing Sell.")
         # ---------------------------------------------------------------------
 
         print(
@@ -190,20 +194,25 @@ class TradingBot:
             return
 
         if action == "BUY" and not has_position:
-            if conf >= config.BASE_THRESHOLD: # Only buy if over threshold
+            if conf >= config.BASE_THRESHOLD: 
                 qty = self.risk.position_size(equity, price)
                 if qty * price < config.MIN_NOTIONAL_PER_TRADE:
                     print(f"[{symbol}] Notional ${qty*price:.2f} below minimum, skip.")
                     return
-                order = self.broker.submit_order(symbol, "buy", qty)
+                
+                # FIX: Remove slash for Alpaca API order submission
+                broker_symbol = symbol.replace("/", "")
+                order = self.broker.submit_order(broker_symbol, "buy", qty)
                 if order:
                     self.positions[symbol] = price
                     final_action = "BUY"
 
         elif action == "SELL" and has_position:
-            # Hard overrides pass through here automatically now because conf == 1.0
             if conf >= config.BASE_THRESHOLD or conf == 1.0:
-                order = self.broker.close_position(symbol)
+                
+                # FIX: Remove slash for Alpaca API position closure
+                broker_symbol = symbol.replace("/", "")
+                order = self.broker.close_position(broker_symbol)
                 if order:
                     entry = self.positions.pop(symbol)
                     pnl_pct = (price - entry) / entry
