@@ -158,6 +158,26 @@ class TradingBot:
         regime     = decision["regime"]
 
         has_position = symbol in self.positions
+        final_action = "HOLD"
+        qty          = 0.0
+
+        # ------------------------------------------------ HARD CODED RULES FIX
+        if has_position:
+            entry_price = self.positions[symbol]
+            current_pnl = (price - entry_price) / entry_price
+
+            # FORCE TAKE PROFIT (e.g., 5% gains)
+            if current_pnl >= 0.05:
+                action = "SELL"
+                conf = 1.0
+                print(f"[{symbol}] HARD PROFIT TARGET HIT: {current_pnl:+.2%}. Forcing Sell.")
+            
+            # FORCE STOP LOSS (e.g., 3% loss protection)
+            elif current_pnl <= -0.03:
+                action = "SELL"
+                conf = 1.0
+                print(f"[{symbol}] HARD STOP LOSS HIT: {current_pnl:+.2%}. Forcing Sell.")
+        # ---------------------------------------------------------------------
 
         print(
             f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} tech={tech_signal:.3f} "
@@ -169,26 +189,26 @@ class TradingBot:
                       0, equity, dd, regime, "max_drawdown")
             return
 
-        qty          = 0.0
-        final_action = "HOLD"
-
         if action == "BUY" and not has_position:
-            qty = self.risk.position_size(equity, price)
-            if qty * price < config.MIN_NOTIONAL_PER_TRADE:
-                print(f"[{symbol}] Notional ${qty*price:.2f} below minimum, skip.")
-                return
-            order = self.broker.submit_order(symbol, "buy", qty)
-            if order:
-                self.positions[symbol] = price
-                final_action = "BUY"
+            if conf >= config.BASE_THRESHOLD: # Only buy if over threshold
+                qty = self.risk.position_size(equity, price)
+                if qty * price < config.MIN_NOTIONAL_PER_TRADE:
+                    print(f"[{symbol}] Notional ${qty*price:.2f} below minimum, skip.")
+                    return
+                order = self.broker.submit_order(symbol, "buy", qty)
+                if order:
+                    self.positions[symbol] = price
+                    final_action = "BUY"
 
         elif action == "SELL" and has_position:
-            order = self.broker.close_position(symbol)
-            if order:
-                entry = self.positions.pop(symbol)
-                pnl_pct = (price - entry) / entry
-                print(f"[{symbol}] Closed. PnL: {pnl_pct:+.2%}")
-                final_action = "SELL"
+            # Hard overrides pass through here automatically now because conf == 1.0
+            if conf >= config.BASE_THRESHOLD or conf == 1.0:
+                order = self.broker.close_position(symbol)
+                if order:
+                    entry = self.positions.pop(symbol)
+                    pnl_pct = (price - entry) / entry
+                    print(f"[{symbol}] Closed. PnL: {pnl_pct:+.2%}")
+                    final_action = "SELL"
 
         elif action == "BUY" and has_position:
             final_action = "HOLD_LONG"
@@ -196,7 +216,6 @@ class TradingBot:
         elif action == "SELL" and not has_position:
             final_action = "HOLD_FLAT"
 
-        # Log every cycle so you can see what the bot is thinking
         self._log(symbol, price, final_action, conf, tech_signal, ml_prob,
                   qty, equity, dd, regime)
 
