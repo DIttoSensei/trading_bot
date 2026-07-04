@@ -13,9 +13,11 @@ from alpaca.data.timeframe import TimeFrame
 import config
 from broker import Broker
 from ml_layer import MLSpecialist
+from layer1_technical import technical_bot # Connected Layer 1
 from layer3_judge import LLMJudge
 from risk import RiskManager
 from sheet_logger import GoogleSheetLogger
+from foresight_engine import ForesightEngine # Connected Foresight Math
 
 
 class TradingBot:
@@ -31,6 +33,10 @@ class TradingBot:
         self.ml = {s: MLSpecialist(s) for s in self.symbols}
         self.judge = LLMJudge()
         self.risk = RiskManager(config.MAX_DRAWDOWN)
+        
+        # Link Foresight Engine using config minimum profit target
+        self.foresight = ForesightEngine(min_profit_pct=config.MIN_PROFIT_TARGET_PCT)
+        
         self.logger = GoogleSheetLogger(
             config.GOOGLE_CREDENTIALS_FILE,
             config.GOOGLE_SHEETS_NAME,
@@ -40,7 +46,6 @@ class TradingBot:
         self.positions = {}
         self._load_state()
 
-    # ------------------------------------------------------------------ state
     def _load_state(self):
         if os.path.exists(self.state_path):
             try:
@@ -59,17 +64,13 @@ class TradingBot:
             print(f"[State] Save failed: {e}")
 
     def _sync_positions_from_broker(self):
-        """Sync open positions from Alpaca — cleaned string tracking fix applied."""
         try:
             live = self.broker.get_all_positions()
             synced = {}
             for p in live:
-                # Force clean the broker's symbol string
                 raw = p.symbol.replace("/", "").strip().upper()
                 for s in self.symbols:
-                    # Force clean your config's symbol string
                     clean_config = s.replace("/", "").strip().upper()
-                    
                     if clean_config == raw:
                         synced[s] = float(p.avg_entry_price)
                         break
@@ -78,7 +79,6 @@ class TradingBot:
         except Exception as e:
             print(f"[State] Broker sync failed, using cached state: {e}")
 
-    # ------------------------------------------------------------------ data
     def fetch_data(self, symbol: str):
         try:
             end   = datetime.now(UTC)
@@ -99,26 +99,15 @@ class TradingBot:
             print(f"[Data] fetch failed {symbol}: {e}")
             return None
 
-    # ------------------------------------------------------------------ log
     def _log(self, symbol, price, action, conf, tech, ml_prob, qty, equity, dd, regime, note="ok"):
         row = [
-            datetime.now(UTC).isoformat(),
-            symbol,
-            round(float(price), 4),
-            action,
-            round(float(conf), 4),
-            round(float(tech), 4),
-            round(float(ml_prob), 4),
-            round(float(qty), 8),
-            round(float(equity), 2),
-            round(float(dd), 6),
-            regime,
-            config.BASE_THRESHOLD,
-            note,
+            datetime.now(UTC).isoformat(), symbol, round(float(price), 4), action,
+            round(float(conf), 4), round(float(tech), 4), round(float(ml_prob), 4),
+            round(float(qty), 8), round(float(equity), 2), round(float(dd), 6),
+            regime, config.BASE_THRESHOLD, note,
         ]
         self.logger.log_row(row)
 
-    # ------------------------------------------------------------------ run
     def run_cycle(self):
         print(f"\n{'='*50}")
         print(f"RUN {datetime.now(UTC).isoformat()}")
@@ -147,10 +136,13 @@ class TradingBot:
 
         price = float(df["close"].iloc[-1])
 
+        # Core Engine Linking
         self.ml[symbol].train(df)
         features    = self.ml[symbol].get_latest_features(df)
         ml_prob     = self.ml[symbol].predict(features)
-        tech_signal = self._tech_signal(df)
+        
+        # Delegate technical analysis to Layer 1 module
+        tech_signal = technical_bot(df)
 
         decision   = self.judge.evaluate(tech_signal, ml_prob, df)
         action     = decision["action"]
@@ -161,27 +153,20 @@ class TradingBot:
         final_action = "HOLD"
         qty          = 0.0
 
-        # ------------------------------------------------ ADJUSTABLE EXITS
+        # Dynamic Foresight Exit Rules
         if has_position:
             entry_price = self.positions[symbol]
-            current_pnl = (price - entry_price) / entry_price
-
-            # Change these percentages to whatever you want for your assets
-            TAKE_PROFIT_TARGET = 0.05  # e.g., 5% profit target
-            STOP_LOSS_TARGET   = -0.03 # e.g., -3% stop loss protection
-
-            # FORCE TAKE PROFIT
-            if current_pnl >= TAKE_PROFIT_TARGET:
-                action = "SELL"
-                conf = 1.0
-                print(f"[{symbol}] ADJUSTABLE PROFIT TARGET HIT: {current_pnl:+.2%}. Forcing Sell.")
+            targets = self.foresight.get_dynamic_targets(df, entry_price)
             
-            # FORCE STOP LOSS
-            elif current_pnl <= STOP_LOSS_TARGET:
+            if price >= targets["take_profit"]:
                 action = "SELL"
                 conf = 1.0
-                print(f"[{symbol}] ADJUSTABLE STOP LOSS HIT: {current_pnl:+.2%}. Forcing Sell.")
-        # ---------------------------------------------------------------------
+                print(f"[{symbol}] FORESIGHT PROFIT HIT: Target ${targets['take_profit']:.2f}. Forcing Sell.")
+            
+            elif price <= targets["stop_loss"]:
+                action = "SELL"
+                conf = 1.0
+                print(f"[{symbol}] FORESIGHT STOP LOSS HIT: Limit ${targets['stop_loss']:.2f}. Forcing Sell.")
 
         print(
             f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} tech={tech_signal:.3f} "
@@ -189,18 +174,16 @@ class TradingBot:
         )
 
         if not self.risk.allow_trading(equity):
-            self._log(symbol, price, "BLOCKED", conf, tech_signal, ml_prob,
-                      0, equity, dd, regime, "max_drawdown")
+            self._log(symbol, price, "BLOCKED", conf, tech_signal, ml_prob, 0, equity, dd, regime, "max_drawdown")
             return
 
+        # Execution Blocks with Slash Scrubbing for Alpaca
         if action == "BUY" and not has_position:
             if conf >= config.BASE_THRESHOLD: 
                 qty = self.risk.position_size(equity, price)
                 if qty * price < config.MIN_NOTIONAL_PER_TRADE:
-                    print(f"[{symbol}] Notional ${qty*price:.2f} below minimum, skip.")
                     return
                 
-                # FIX: Remove slash for Alpaca API order submission
                 broker_symbol = symbol.replace("/", "")
                 order = self.broker.submit_order(broker_symbol, "buy", qty)
                 if order:
@@ -208,9 +191,7 @@ class TradingBot:
                     final_action = "BUY"
 
         elif action == "SELL" and has_position:
-            if conf >= config.BASE_THRESHOLD or conf == 1.0:
-                
-                # FIX: Remove slash for Alpaca API position closure
+            if conf >= 0.45 or conf == 1.0: # Matches new Judge exhaustion limit
                 broker_symbol = symbol.replace("/", "")
                 order = self.broker.close_position(broker_symbol)
                 if order:
@@ -225,23 +206,7 @@ class TradingBot:
         elif action == "SELL" and not has_position:
             final_action = "HOLD_FLAT"
 
-        self._log(symbol, price, final_action, conf, tech_signal, ml_prob,
-                  qty, equity, dd, regime)
-
-    # ------------------------------------------------------------------ tech
-    def _tech_signal(self, df: pd.DataFrame) -> float:
-        try:
-            delta = df["close"].diff()
-            gain  = delta.clip(lower=0).rolling(14).mean()
-            loss  = (-delta.clip(upper=0)).rolling(14).mean()
-            rs    = gain / loss.replace(0, np.nan)
-            rsi   = float((100 - (100 / (1 + rs))).iloc[-1])
-            if np.isnan(rsi):
-                return 0.5
-            return float(np.clip(1.0 - (rsi / 100.0), 0.0, 1.0))
-        except Exception:
-            return 0.5
-
+        self._log(symbol, price, final_action, conf, tech_signal, ml_prob, qty, equity, dd, regime)
 
 if __name__ == "__main__":
     bot = TradingBot()

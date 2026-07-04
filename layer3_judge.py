@@ -1,30 +1,25 @@
-"""
-layer3_judge.py
-Decision engine. Combines ML probability + technical signal.
-Regime detection uses MA20/MA50 crossover.
-Optimized for Two-Way Profit Capture: ML Priority Pass on both High and Low confidence.
-"""
 import numpy as np
 import pandas as pd
 import config
 
-
 class LLMJudge:
     def evaluate(self, tech_signal: float, ml_prob: float, df: pd.DataFrame) -> dict:
-        # Profit Hunter Rule: If ML has a strong directional stance, let it override completely
-        if ml_prob > 0.50:
-            confidence = ml_prob  # Bypasses tech drag to trigger BUY faster
-        elif ml_prob < 0.49:
-            confidence = ml_prob  # Bypasses tech drag to trigger SELL faster
+        # Profit Hunter Pass
+        if ml_prob > 0.60:
+            confidence = ml_prob
+        elif ml_prob < 0.40:
+            confidence = ml_prob 
         else:
-            # Fall back to the defensive blend ONLY when ML is completely neutral (0.49 to 0.50)
-            confidence = (ml_prob * 0.65) + (tech_signal * 0.35)
+            # Defensive Blend: Heavier weight on tech signals when ML is uncertain
+            confidence = (ml_prob * 0.40) + (tech_signal * 0.60)
             
         confidence = float(np.clip(confidence, 0.0, 1.0))
 
+        # Dynamic Action Engine
         if confidence >= config.BASE_THRESHOLD:
             action = "BUY"
-        elif confidence <= (1.0 - config.BASE_THRESHOLD):
+        # If technicals drop below 0.45, it indicates exhaustion. Start selling.
+        elif confidence <= 0.45:
             action = "SELL"
         else:
             action = "HOLD"
