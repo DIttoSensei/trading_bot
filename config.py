@@ -27,3 +27,9 @@ MIN_NOTIONAL_PER_TRADE = 10.0
 MAX_NOTIONAL_PER_TRADE = 5000.0
 
 MIN_PROFIT_TARGET_PCT = 0.04
+
+SWING_BUY_THRESHOLD = 0.70  # High conviction threshold
+SCALP_BUY_THRESHOLD = 0.58  # Moderate conviction threshold
+SCALP_TP_PCT = 0.015        # Scalp Take Profit (1.5%)
+SCALP_SL_PCT = 0.0075       # Scalp Stop Loss (0.75%)
+
