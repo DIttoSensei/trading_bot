@@ -13,12 +13,11 @@ from alpaca.data.timeframe import TimeFrame
 import config
 from broker import Broker
 from ml_layer import MLSpecialist
-from layer1_technical import technical_bot # Connected Layer 1
+from layer1_technical import technical_bot 
 from layer3_judge import LLMJudge
 from risk import RiskManager
 from sheet_logger import GoogleSheetLogger
-from foresight_engine import ForesightEngine # Connected Foresight Math
-
+from foresight_engine import ForesightEngine 
 
 class TradingBot:
     def __init__(self):
@@ -33,10 +32,9 @@ class TradingBot:
         self.ml = {s: MLSpecialist(s) for s in self.symbols}
         self.judge = LLMJudge()
         self.risk = RiskManager(config.MAX_DRAWDOWN)
-        
-        # Link Foresight Engine using config minimum profit target
+
         self.foresight = ForesightEngine(min_profit_pct=config.MIN_PROFIT_TARGET_PCT)
-        
+
         self.logger = GoogleSheetLogger(
             config.GOOGLE_CREDENTIALS_FILE,
             config.GOOGLE_SHEETS_NAME,
@@ -51,7 +49,13 @@ class TradingBot:
             try:
                 with open(self.state_path) as f:
                     data = json.load(f)
-                    self.positions = data.get("positions", {})
+                    raw_positions = data.get("positions", {})
+                    # Migrate old float formats to new dict format if necessary
+                    for sym, val in raw_positions.items():
+                        if isinstance(val, float):
+                            self.positions[sym] = {"entry": val, "type": "SWING"}
+                        else:
+                            self.positions[sym] = val
                 print(f"[State] Loaded positions: {list(self.positions.keys()) or 'none'}")
             except Exception as e:
                 print(f"[State] Load failed: {e}")
@@ -72,7 +76,9 @@ class TradingBot:
                 for s in self.symbols:
                     clean_config = s.replace("/", "").strip().upper()
                     if clean_config == raw:
-                        synced[s] = float(p.avg_entry_price)
+                        # If already in local state, keep the type. Otherwise, default to SWING.
+                        existing_type = self.positions.get(s, {}).get("type", "SWING")
+                        synced[s] = {"entry": float(p.avg_entry_price), "type": existing_type}
                         break
             self.positions = synced
             print(f"[State] Broker sync: {list(self.positions.keys()) or 'no open positions'}")
@@ -104,7 +110,7 @@ class TradingBot:
             datetime.now(UTC).isoformat(), symbol, round(float(price), 4), action,
             round(float(conf), 4), round(float(tech), 4), round(float(ml_prob), 4),
             round(float(qty), 8), round(float(equity), 2), round(float(dd), 6),
-            regime, config.BASE_THRESHOLD, note,
+            regime, getattr(config, 'SWING_BUY_THRESHOLD', 0.70), note,
         ]
         self.logger.log_row(row)
 
@@ -136,12 +142,9 @@ class TradingBot:
 
         price = float(df["close"].iloc[-1])
 
-        # Core Engine Linking
         self.ml[symbol].train(df)
         features    = self.ml[symbol].get_latest_features(df)
         ml_prob     = self.ml[symbol].predict(features)
-        
-        # Delegate technical analysis to Layer 1 module
         tech_signal = technical_bot(df)
 
         decision   = self.judge.evaluate(tech_signal, ml_prob, df)
@@ -153,20 +156,33 @@ class TradingBot:
         final_action = "HOLD"
         qty          = 0.0
 
-        # Dynamic Foresight Exit Rules
+        # Fetch Thresholds safely
+        swing_thresh = getattr(config, 'SWING_BUY_THRESHOLD', 0.70)
+        scalp_thresh = getattr(config, 'SCALP_BUY_THRESHOLD', 0.58)
+
+        # Dynamic Dual Exit Rules
         if has_position:
-            entry_price = self.positions[symbol]
-            targets = self.foresight.get_dynamic_targets(df, entry_price)
-            
-            if price >= targets["take_profit"]:
+            pos_data = self.positions[symbol]
+            entry_price = pos_data["entry"]
+            trade_type = pos_data["type"]
+
+            if trade_type == "SWING":
+                targets = self.foresight.get_dynamic_targets(df, entry_price)
+                tp = targets["take_profit"]
+                sl = targets["stop_loss"]
+            else:
+                # SCALP Math: Fixed tight percentages (e.g., 1.5% profit, 0.75% stop loss)
+                tp = entry_price * (1 + getattr(config, 'SCALP_TP_PCT', 0.015))
+                sl = entry_price * (1 - getattr(config, 'SCALP_SL_PCT', 0.0075))
+
+            if price >= tp:
                 action = "SELL"
                 conf = 1.0
-                print(f"[{symbol}] FORESIGHT PROFIT HIT: Target ${targets['take_profit']:.2f}. Forcing Sell.")
-            
-            elif price <= targets["stop_loss"]:
+                print(f"[{symbol}] {trade_type} PROFIT HIT: Target ${tp:.2f}. Forcing Sell.")
+            elif price <= sl:
                 action = "SELL"
                 conf = 1.0
-                print(f"[{symbol}] FORESIGHT STOP LOSS HIT: Limit ${targets['stop_loss']:.2f}. Forcing Sell.")
+                print(f"[{symbol}] {trade_type} STOP LOSS HIT: Limit ${sl:.2f}. Forcing Sell.")
 
         print(
             f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} tech={tech_signal:.3f} "
@@ -177,31 +193,41 @@ class TradingBot:
             self._log(symbol, price, "BLOCKED", conf, tech_signal, ml_prob, 0, equity, dd, regime, "max_drawdown")
             return
 
-        # Execution Blocks with Slash Scrubbing for Alpaca
+        # Execution Blocks 
         if action == "BUY" and not has_position:
-            if conf >= config.BASE_THRESHOLD: 
+            # TIER 1: SWING
+            if conf >= swing_thresh: 
                 qty = self.risk.position_size(equity, price)
-                if qty * price < config.MIN_NOTIONAL_PER_TRADE:
-                    return
-                
-                broker_symbol = symbol.replace("/", "")
-                order = self.broker.submit_order(broker_symbol, "buy", qty)
-                if order:
-                    self.positions[symbol] = price
-                    final_action = "BUY"
+                if qty * price >= config.MIN_NOTIONAL_PER_TRADE:
+                    broker_symbol = symbol.replace("/", "")
+                    order = self.broker.submit_order(broker_symbol, "buy", qty)
+                    if order:
+                        self.positions[symbol] = {"entry": price, "type": "SWING"}
+                        final_action = "BUY_SWING"
+
+            # TIER 2: SCALP
+            elif conf >= scalp_thresh:
+                # Scalps might use a different risk weighting, but we default to standard here
+                qty = self.risk.position_size(equity, price)
+                if qty * price >= config.MIN_NOTIONAL_PER_TRADE:
+                    broker_symbol = symbol.replace("/", "")
+                    order = self.broker.submit_order(broker_symbol, "buy", qty)
+                    if order:
+                        self.positions[symbol] = {"entry": price, "type": "SCALP"}
+                        final_action = "BUY_SCALP"
 
         elif action == "SELL" and has_position:
-            if conf >= 0.45 or conf == 1.0: # Matches new Judge exhaustion limit
+            if conf >= 0.45 or conf == 1.0: 
                 broker_symbol = symbol.replace("/", "")
                 order = self.broker.close_position(broker_symbol)
                 if order:
-                    entry = self.positions.pop(symbol)
-                    pnl_pct = (price - entry) / entry
-                    print(f"[{symbol}] Closed. PnL: {pnl_pct:+.2%}")
-                    final_action = "SELL"
+                    entry_data = self.positions.pop(symbol)
+                    pnl_pct = (price - entry_data["entry"]) / entry_data["entry"]
+                    print(f"[{symbol}] Closed {entry_data['type']}. PnL: {pnl_pct:+.2%}")
+                    final_action = f"SELL_{entry_data['type']}"
 
         elif action == "BUY" and has_position:
-            final_action = "HOLD_LONG"
+            final_action = f"HOLD_{self.positions[symbol]['type']}"
 
         elif action == "SELL" and not has_position:
             final_action = "HOLD_FLAT"
