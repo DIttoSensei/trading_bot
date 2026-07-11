@@ -1,3 +1,12 @@
 {
-  "positions": {}
+  "positions": {
+    "BTC/USD": {
+      "entry": 64169.76,
+      "type": "SWING"
+    },
+    "ETH/USD": {
+      "entry": 1800.45,
+      "type": "SCALP"
+    }
+  }
 }
