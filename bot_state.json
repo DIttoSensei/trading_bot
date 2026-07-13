@@ -3,14 +3,6 @@
     "ETH/USD": {
       "entry": 1800.7,
       "type": "SCALP"
-    },
-    "BTC/USD": {
-      "entry": 64198.7225,
-      "type": "SCALP"
-    },
-    "SOL/USD": {
-      "entry": 77.5211,
-      "type": "SCALP"
     }
   }
 }
