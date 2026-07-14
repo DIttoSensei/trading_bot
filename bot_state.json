@@ -7,6 +7,10 @@
     "SOL/USD": {
       "entry": 74.77751848,
       "type": "SWING"
+    },
+    "ETH/USD": {
+      "entry": 1783.05,
+      "type": "SCALP"
     }
   }
 }
