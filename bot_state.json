@@ -1,15 +1,15 @@
 {
   "positions": {
+    "BTC/USD": {
+      "entry": 64986.37,
+      "type": "SWING"
+    },
     "ETH/USD": {
       "entry": 1920.787,
       "type": "SWING"
     },
     "SOL/USD": {
       "entry": 76.46352,
-      "type": "SWING"
-    },
-    "BTC/USD": {
-      "entry": 64967.715,
       "type": "SWING"
     }
   }
