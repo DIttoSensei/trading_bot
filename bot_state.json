@@ -1,3 +1,8 @@
 {
-  "positions": {}
+  "positions": {
+    "ETH/USD": {
+      "entry": 1877.7655,
+      "type": "SCALP"
+    }
+  }
 }
