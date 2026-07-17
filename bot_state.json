@@ -1,11 +1,11 @@
 {
   "positions": {
-    "SOL/USD": {
-      "entry": 74.849490348,
+    "ETH/USD": {
+      "entry": 1828.4,
       "type": "SWING"
     },
-    "ETH/USD": {
-      "entry": 1825.387,
+    "SOL/USD": {
+      "entry": 74.849490348,
       "type": "SWING"
     }
   }
