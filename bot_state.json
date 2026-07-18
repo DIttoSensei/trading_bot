@@ -1,3 +1,8 @@
 {
-  "positions": {}
+  "positions": {
+    "BTC/USD": {
+      "entry": 63926.5675,
+      "type": "SWING"
+    }
+  }
 }
