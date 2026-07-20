@@ -3,14 +3,6 @@
     "BTC/USD": {
       "entry": 63976.83,
       "type": "SWING"
-    },
-    "ETH/USD": {
-      "entry": 1869.003,
-      "type": "SCALP"
-    },
-    "SOL/USD": {
-      "entry": 74.526255993,
-      "type": "SWING"
     }
   }
 }
