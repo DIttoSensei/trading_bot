@@ -3,6 +3,14 @@
     "BTC/USD": {
       "entry": 63976.83,
       "type": "SWING"
+    },
+    "ETH/USD": {
+      "entry": 1904.1905,
+      "type": "SWING"
+    },
+    "SOL/USD": {
+      "entry": 77.84455,
+      "type": "SWING"
     }
   }
 }
