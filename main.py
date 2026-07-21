@@ -156,45 +156,59 @@ class TradingBot:
         final_action = "HOLD"
         qty          = 0.0
 
-        # Fetch Thresholds safely
-        swing_thresh = getattr(config, 'SWING_BUY_THRESHOLD', 0.70)
-        scalp_thresh = getattr(config, 'SCALP_BUY_THRESHOLD', 0.58)
+        swing_thresh = getattr(config, 'SWING_BUY_THRESHOLD', 0.72)
+        scalp_thresh = getattr(config, 'SCALP_BUY_THRESHOLD', 0.65)
 
-        # Dynamic Dual Exit Rules
+        # -----------------------------------------------------------------
+        # FIX 1: DYNAMIC EXITS & BEAR LIQUIDATION
+        # -----------------------------------------------------------------
         if has_position:
             pos_data = self.positions[symbol]
             entry_price = pos_data["entry"]
             trade_type = pos_data["type"]
 
-            if trade_type == "SWING":
-                targets = self.foresight.get_dynamic_targets(df, entry_price)
-                tp = targets["take_profit"]
-                sl = targets["stop_loss"]
+            # Emergency Exit: If market regime flips to BEAR, dump open long positions immediately
+            if regime == "bear":
+                action = "SELL"
+                conf = 1.0
+                print(f"[{symbol}] REGIME SHIFT TO BEAR: Forcing position liquidation.")
             else:
-                # SCALP Math: Fixed tight percentages (e.g., 1.5% profit, 0.75% stop loss)
-                tp = entry_price * (1 + getattr(config, 'SCALP_TP_PCT', 0.015))
-                sl = entry_price * (1 - getattr(config, 'SCALP_SL_PCT', 0.0075))
+                if trade_type == "SWING":
+                    targets = self.foresight.get_dynamic_targets(df, entry_price)
+                    tp = targets["take_profit"]
+                    sl = targets["stop_loss"]
+                else:
+                    tp = entry_price * (1 + getattr(config, 'SCALP_TP_PCT', 0.020))
+                    sl = entry_price * (1 - getattr(config, 'SCALP_SL_PCT', 0.008))
 
-            if price >= tp:
-                action = "SELL"
-                conf = 1.0
-                print(f"[{symbol}] {trade_type} PROFIT HIT: Target ${tp:.2f}. Forcing Sell.")
-            elif price <= sl:
-                action = "SELL"
-                conf = 1.0
-                print(f"[{symbol}] {trade_type} STOP LOSS HIT: Limit ${sl:.2f}. Forcing Sell.")
+                if price >= tp:
+                    action = "SELL"
+                    conf = 1.0
+                    print(f"[{symbol}] {trade_type} PROFIT HIT: Target ${tp:.2f}. Forcing Sell.")
+                elif price <= sl:
+                    action = "SELL"
+                    conf = 1.0
+                    print(f"[{symbol}] {trade_type} STOP LOSS HIT: Limit ${sl:.2f}. Forcing Sell.")
 
         print(
             f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} tech={tech_signal:.3f} "
-            f"conf={conf:.3f} | signal={action} | holding={'YES' if has_position else 'NO'}"
+            f"conf={conf:.3f} | regime={regime} | signal={action} | holding={'YES' if has_position else 'NO'}"
         )
 
         if not self.risk.allow_trading(equity):
             self._log(symbol, price, "BLOCKED", conf, tech_signal, ml_prob, 0, equity, dd, regime, "max_drawdown")
             return
 
-        # Execution Blocks 
+        # -----------------------------------------------------------------
+        # FIX 2: EXECUTION BLOCK WITH REGIME GUARD
+        # -----------------------------------------------------------------
         if action == "BUY" and not has_position:
+            # HARD GUARD: Absolutely NO new buy orders during a bear regime
+            if regime == "bear":
+                print(f"[{symbol}] BUY REJECTED: Regime is BEAR. Knife-catching prevented.")
+                self._log(symbol, price, "BLOCKED_BEAR", conf, tech_signal, ml_prob, 0, equity, dd, regime, "bear_regime_block")
+                return
+
             # TIER 1: SWING
             if conf >= swing_thresh: 
                 qty = self.risk.position_size(equity, price)
@@ -207,7 +221,6 @@ class TradingBot:
 
             # TIER 2: SCALP
             elif conf >= scalp_thresh:
-                # Scalps might use a different risk weighting, but we default to standard here
                 qty = self.risk.position_size(equity, price)
                 if qty * price >= config.MIN_NOTIONAL_PER_TRADE:
                     broker_symbol = symbol.replace("/", "")
