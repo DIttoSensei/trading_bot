@@ -47,14 +47,15 @@ def walk_forward_gate(df: pd.DataFrame, min_rows: int, test_window: int, min_sig
             trades = test[relaxed_rule.loc[test.index]]
         if len(trades) < min_signals:
             trades = test[loose_rule.loc[test.index]]
-        if len(trades) < min_signals:
-            # Final fallback: pick strongest momentum bars so gate always has enough evaluations.
-            trades = test.reindex(test["mom_3"].abs().sort_values(ascending=False).index).head(min_signals)
+        
 
         signals = int(len(trades))
         window_used = window
         if signals >= min_signals:
             break
+
+    if signals < min_signals:
+        return {"pass": False, "reason": "insufficient_real_signals", "signals": signals, "winrate": 0.0}
 
     wins = int((trades["fwd_ret"] > 0).sum())
     winrate = wins / signals if signals else 0.0
