@@ -1,8 +1,3 @@
 {
-  "positions": {
-    "ETH/USD": {
-      "entry": 1929.537,
-      "type": "SWING"
-    }
-  }
+  "positions": {}
 }
