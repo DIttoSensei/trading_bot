@@ -162,8 +162,17 @@ class TradingBot:
         swing_thresh = getattr(config, 'SYMBOL_SWING_THRESHOLDS', {}).get(
             symbol, getattr(config, 'SWING_BUY_THRESHOLD', 0.68)
         )
-        min_mag = getattr(config, 'MIN_MAGNITUDE_CONFIDENCE', 0.55)
-        magnitude_favorable = mag_prob >= min_mag
+
+        # --- Magnitude gate, calibrated per-symbol against its own base rate ---
+        base_rate = getattr(self.ml[symbol], 'mag_base_rate', 0.3)
+        multiplier = getattr(config, 'MAGNITUDE_THRESHOLD_MULTIPLIER', 1.3)
+        min_mag = min(base_rate * multiplier, 0.75)
+
+        reliable_symbols = getattr(config, 'SYMBOLS_WITH_RELIABLE_MAGNITUDE', ["BTC/USD", "ETH/USD"])
+        if symbol in reliable_symbols:
+            magnitude_favorable = mag_prob >= min_mag
+        else:
+            magnitude_favorable = True  # magnitude model not trustworthy yet for this symbol, don't gate on it
 
         # -----------------------------------------------------------------
         # DYNAMIC EXITS & BEAR LIQUIDATION
@@ -200,10 +209,11 @@ class TradingBot:
             return
 
         # -----------------------------------------------------------------
-        # MAGNITUDE GATE — skip directional buys during predicted-quiet periods
+        # MAGNITUDE GATE
         # -----------------------------------------------------------------
         if action == "BUY" and not has_position and not magnitude_favorable:
-            print(f"[{symbol}] BUY SKIPPED: magnitude confidence too low ({mag_prob:.3f} < {min_mag}) — likely quiet period.")
+            print(f"[{symbol}] BUY SKIPPED: magnitude confidence too low ({mag_prob:.3f} < {min_mag:.3f}, "
+                  f"base_rate={base_rate:.3f}) — likely quiet period.")
             self._log(symbol, price, "BLOCKED_LOW_MAGNITUDE", conf, tech_signal, ml_prob, 0, equity, dd, regime, "low_magnitude")
             return
 
@@ -251,9 +261,9 @@ class TradingBot:
             final_action = "HOLD_FLAT"
 
         print(
-            f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} mag={mag_prob:.3f} tech={tech_signal:.3f} "
-            f"conf={conf:.3f} | regime={regime} | judge_said={action} | actually_did={final_action} | "
-            f"holding={'YES' if has_position else 'NO'}"
+            f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} mag={mag_prob:.3f} (min_mag={min_mag:.3f}) "
+            f"tech={tech_signal:.3f} conf={conf:.3f} | regime={regime} | judge_said={action} | "
+            f"actually_did={final_action} | holding={'YES' if has_position else 'NO'}"
         )
 
         self._log(symbol, price, final_action, conf, tech_signal, ml_prob, qty, equity, dd, regime)
