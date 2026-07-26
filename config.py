@@ -73,3 +73,17 @@ SCALP_BUY_THRESHOLD = 0.58  # Moderate conviction threshold
 SCALP_TP_PCT = 0.015        # Scalp Take Profit (1.5%)
 SCALP_SL_PCT = 0.0075       # Scalp Stop Loss (0.75%)
 
+
+SYMBOL_SCALP_THRESHOLDS = {
+    "BTC/USD": 0.53,
+    "ETH/USD": 0.60,
+    "SOL/USD": 0.52,
+}
+
+SYMBOL_SWING_THRESHOLDS = {
+    "BTC/USD": 0.62,
+    "ETH/USD": 0.72,
+    "SOL/USD": 0.60,
+}
+
+MIN_MAGNITUDE_CONFIDENCE = 0.55
