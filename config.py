@@ -86,4 +86,5 @@ SYMBOL_SWING_THRESHOLDS = {
     "SOL/USD": 0.60,
 }
 
-MIN_MAGNITUDE_CONFIDENCE = 0.55
+MAGNITUDE_THRESHOLD_MULTIPLIER = 1.3   # require magnitude prob to be 1.3x each symbol's own base rate
+SYMBOLS_WITH_RELIABLE_MAGNITUDE = ["BTC/USD", "ETH/USD"]  # SOL excluded until its magnitude AUC recovers above ~0.55
