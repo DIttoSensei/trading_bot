@@ -190,10 +190,6 @@ class TradingBot:
                     conf = 1.0
                     print(f"[{symbol}] {trade_type} STOP LOSS HIT: Limit ${sl:.2f}. Forcing Sell.")
 
-        print(
-            f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} tech={tech_signal:.3f} "
-            f"conf={conf:.3f} | regime={regime} | signal={action} | holding={'YES' if has_position else 'NO'}"
-        )
 
         if not self.risk.allow_trading(equity):
             self._log(symbol, price, "BLOCKED", conf, tech_signal, ml_prob, 0, equity, dd, regime, "max_drawdown")
@@ -244,6 +240,12 @@ class TradingBot:
 
         elif action == "SELL" and not has_position:
             final_action = "HOLD_FLAT"
+
+        print(
+            f"[{symbol}] ${price:.2f} | ml={ml_prob:.3f} tech={tech_signal:.3f} "
+            f"conf={conf:.3f} | regime={regime} | judge_said={action} | actually_did={final_action} | "
+            f"holding={'YES' if has_position else 'NO'}"
+        )
 
         self._log(symbol, price, final_action, conf, tech_signal, ml_prob, qty, equity, dd, regime)
 
