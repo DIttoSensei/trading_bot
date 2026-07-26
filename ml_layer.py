@@ -5,8 +5,9 @@ ml_layer.py
   - Expanded feature set (acceleration, volatility regime, wick structure, volume-weighted return)
   - Class balance handling via scale_pos_weight
   - Early stopping on the holdout set to fight overfitting
-  - Direction model (buy/sell signal) AND magnitude model (is a real move likely at all),
-    both persisted and usable live — magnitude acts as a gate on direction trades
+  - Direction model AND magnitude model, both persisted and usable live
+  - mag_base_rate exposed so the magnitude gate can be calibrated per-symbol instead of using
+    one flat threshold that ignores how rare big moves are for each asset
   - Metrics persisted to ml_metrics_history.json so you can track quality over time
 """
 import os
@@ -42,6 +43,7 @@ class MLSpecialist:
         self.scaler = None
         self.mag_model = None
         self.mag_scaler = None
+        self.mag_base_rate = 0.3  # sane default until first train() runs
 
         self._load()
         self.last_metrics = {}
@@ -84,7 +86,6 @@ class MLSpecialist:
         return df
 
     def _fit_one(self, X_train, y_train, X_test, y_test, label: str):
-        """Fits one XGB model with early stopping, returns (fitted_scaler, fitted_model, metrics_dict)."""
         pos_rate = y_train.mean()
         scale_pos_weight = (1 - pos_rate) / pos_rate if 0 < pos_rate < 1 else 1.0
 
@@ -145,7 +146,7 @@ class MLSpecialist:
         df_base = self._build_features(df)
         future = (df_base["close"].shift(-4) - df_base["close"]) / df_base["close"].replace(0, np.nan)
         df_base["target_direction"] = (future > 0).astype(int)
-        df_base["target_magnitude"] = (future.abs() > 0.01).astype(int)  # >1% move either direction
+        df_base["target_magnitude"] = (future.abs() > 0.01).astype(int)
 
         df_train_full = df_base.dropna(
             subset=FEATURES + ["target_direction", "target_magnitude"]
@@ -169,8 +170,9 @@ class MLSpecialist:
         )
         all_metrics.append(metrics_dir)
 
-        # --- Magnitude model (now also used live as a gate, not just diagnostic) ---
+        # --- Magnitude model ---
         y_mag = df_train_full["target_magnitude"]
+        self.mag_base_rate = float(y_mag.mean())  # store base rate for threshold calibration
         y_mag_train, y_mag_test = y_mag.iloc[:split_idx], y_mag.iloc[split_idx:]
         try:
             _, _, metrics_mag = self._fit_one(
@@ -202,7 +204,7 @@ class MLSpecialist:
             self._append_metrics_log(m)
         self.last_metrics = {m["target"]: m for m in all_metrics}
 
-        # --- Refit direction model on ALL data (train+holdout) for live prediction ---
+        # --- Refit direction model on ALL data for live prediction ---
         scaler_final = StandardScaler()
         X_scaled_full = scaler_final.fit_transform(X)
         clf_final = XGBClassifier(
@@ -248,7 +250,6 @@ class MLSpecialist:
         return df_clean[FEATURES].iloc[[-1]]
 
     def predict(self, X) -> float:
-        """Returns directional probability (up vs down) for the next 4h."""
         if self.model is None or self.scaler is None or X is None:
             return 0.5
         try:
@@ -259,7 +260,6 @@ class MLSpecialist:
             return 0.5
 
     def predict_magnitude(self, X) -> float:
-        """Returns probability that a >1% move (either direction) happens in next 4h."""
         if self.mag_model is None or self.mag_scaler is None or X is None:
             return 0.5
         try:
@@ -276,6 +276,9 @@ class MLSpecialist:
             if self.mag_model is not None:
                 joblib.dump(self.mag_model, self.mag_model_path)
                 joblib.dump(self.mag_scaler, self.mag_scaler_path)
+            # persist base rate alongside models so it survives across runs even before retraining
+            with open(f"mag_base_rate_{self.symbol.replace('/', '')}.json", "w") as f:
+                json.dump({"mag_base_rate": self.mag_base_rate}, f)
         except Exception as e:
             print(f"[ML:{self.symbol}] save failed: {e}")
 
@@ -292,3 +295,10 @@ class MLSpecialist:
                 self.mag_scaler = joblib.load(self.mag_scaler_path)
             except Exception as e:
                 print(f"[ML:{self.symbol}] mag load failed: {e}")
+        rate_path = f"mag_base_rate_{self.symbol.replace('/', '')}.json"
+        if os.path.exists(rate_path):
+            try:
+                with open(rate_path) as f:
+                    self.mag_base_rate = json.load(f).get("mag_base_rate", 0.3)
+            except Exception as e:
+                print(f"[ML:{self.symbol}] base rate load failed: {e}")
