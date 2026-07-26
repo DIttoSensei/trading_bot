@@ -1,13 +1,12 @@
 """
 ml_layer.py
-Now with:
   - Walk-forward holdout evaluation every training cycle (prints accuracy/AUC/Brier)
   - XGBoost classifier instead of LogisticRegression
   - Expanded feature set (acceleration, volatility regime, wick structure, volume-weighted return)
   - Class balance handling via scale_pos_weight
   - Early stopping on the holdout set to fight overfitting
-  - Secondary "magnitude" target logged alongside direction, as a sanity check for
-    whether there's ANY learnable structure even if direction alone is too hard
+  - Direction model (buy/sell signal) AND magnitude model (is a real move likely at all),
+    both persisted and usable live — magnitude acts as a gate on direction trades
   - Metrics persisted to ml_metrics_history.json so you can track quality over time
 """
 import os
@@ -36,8 +35,14 @@ class MLSpecialist:
         self.symbol = symbol
         self.model_path = f"model_{symbol.replace('/', '')}.pkl"
         self.scaler_path = f"scaler_{symbol.replace('/', '')}.pkl"
+        self.mag_model_path = f"mag_model_{symbol.replace('/', '')}.pkl"
+        self.mag_scaler_path = f"mag_scaler_{symbol.replace('/', '')}.pkl"
+
         self.model = None
         self.scaler = None
+        self.mag_model = None
+        self.mag_scaler = None
+
         self._load()
         self.last_metrics = {}
 
@@ -62,7 +67,6 @@ class MLSpecialist:
 
         df["vol_chg"] = df["volume"].pct_change()
 
-        # --- New features ---
         df["rsi_slope"] = df["rsi"].diff(3)
 
         df["vol_ratio"] = df["volatility_24h"] / df["volatility_24h"].rolling(48).mean().replace(0, np.nan)
@@ -157,7 +161,7 @@ class MLSpecialist:
 
         all_metrics = []
 
-        # --- Directional model (the one actually used live) ---
+        # --- Direction model ---
         y_dir = df_train_full["target_direction"]
         y_dir_train, y_dir_test = y_dir.iloc[:split_idx], y_dir.iloc[split_idx:]
         scaler_dir, clf_dir, metrics_dir = self._fit_one(
@@ -165,7 +169,7 @@ class MLSpecialist:
         )
         all_metrics.append(metrics_dir)
 
-        # --- Magnitude model (diagnostic only, tells us if ANY structure exists) ---
+        # --- Magnitude model (now also used live as a gate, not just diagnostic) ---
         y_mag = df_train_full["target_magnitude"]
         y_mag_train, y_mag_test = y_mag.iloc[:split_idx], y_mag.iloc[split_idx:]
         try:
@@ -173,6 +177,24 @@ class MLSpecialist:
                 X_train, y_mag_train, X_test, y_mag_test, "magnitude"
             )
             all_metrics.append(metrics_mag)
+
+            mag_scaler_final = StandardScaler()
+            X_scaled_full_mag = mag_scaler_final.fit_transform(X)
+            mag_clf_final = XGBClassifier(
+                n_estimators=metrics_mag["best_iteration"] or 150,
+                max_depth=3,
+                learning_rate=0.05,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_lambda=2.0,
+                min_child_weight=5,
+                scale_pos_weight=(1 - y_mag.mean()) / y_mag.mean() if 0 < y_mag.mean() < 1 else 1.0,
+                eval_metric="logloss",
+                random_state=42,
+            )
+            mag_clf_final.fit(X_scaled_full_mag, y_mag)
+            self.mag_model = mag_clf_final
+            self.mag_scaler = mag_scaler_final
         except Exception as e:
             print(f"[ML:{self.symbol}] magnitude model skipped: {e}")
 
@@ -180,7 +202,7 @@ class MLSpecialist:
             self._append_metrics_log(m)
         self.last_metrics = {m["target"]: m for m in all_metrics}
 
-        # --- Refit directional model on ALL data (train+holdout) for live prediction ---
+        # --- Refit direction model on ALL data (train+holdout) for live prediction ---
         scaler_final = StandardScaler()
         X_scaled_full = scaler_final.fit_transform(X)
         clf_final = XGBClassifier(
@@ -226,6 +248,7 @@ class MLSpecialist:
         return df_clean[FEATURES].iloc[[-1]]
 
     def predict(self, X) -> float:
+        """Returns directional probability (up vs down) for the next 4h."""
         if self.model is None or self.scaler is None or X is None:
             return 0.5
         try:
@@ -235,10 +258,24 @@ class MLSpecialist:
             print(f"[ML:{self.symbol}] predict error: {e}")
             return 0.5
 
+    def predict_magnitude(self, X) -> float:
+        """Returns probability that a >1% move (either direction) happens in next 4h."""
+        if self.mag_model is None or self.mag_scaler is None or X is None:
+            return 0.5
+        try:
+            X_scaled = self.mag_scaler.transform(X)
+            return float(np.clip(self.mag_model.predict_proba(X_scaled)[0][1], 0.0, 1.0))
+        except Exception as e:
+            print(f"[ML:{self.symbol}] magnitude predict error: {e}")
+            return 0.5
+
     def _save(self):
         try:
             joblib.dump(self.model, self.model_path)
             joblib.dump(self.scaler, self.scaler_path)
+            if self.mag_model is not None:
+                joblib.dump(self.mag_model, self.mag_model_path)
+                joblib.dump(self.mag_scaler, self.mag_scaler_path)
         except Exception as e:
             print(f"[ML:{self.symbol}] save failed: {e}")
 
@@ -249,3 +286,9 @@ class MLSpecialist:
                 self.scaler = joblib.load(self.scaler_path)
             except Exception as e:
                 print(f"[ML:{self.symbol}] load failed: {e}")
+        if os.path.exists(self.mag_model_path) and os.path.exists(self.mag_scaler_path):
+            try:
+                self.mag_model = joblib.load(self.mag_model_path)
+                self.mag_scaler = joblib.load(self.mag_scaler_path)
+            except Exception as e:
+                print(f"[ML:{self.symbol}] mag load failed: {e}")
