@@ -1,7 +1,11 @@
 {
   "positions": {
     "BTC/USD": {
-      "entry": 63491.239,
+      "entry": 63522.484,
+      "type": "SCALP"
+    },
+    "SOL/USD": {
+      "entry": 73.335,
       "type": "SCALP"
     }
   }
